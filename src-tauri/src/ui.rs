@@ -303,7 +303,9 @@ impl UiPlanItem {
                 .map_err(|_| "Ungültiges Datum".to_string())?,
             slot: meal_type_to_slot(&self.meal_type).into(),
             recipe_id: self.recipe_id,
-            title_override: self.title_override.or_else(|| self.recipe.map(|recipe| recipe.title)),
+            title_override: self
+                .title_override
+                .or_else(|| self.recipe.map(|recipe| recipe.title)),
             servings: self.servings,
             status: self.status,
             notes: self.note,
@@ -424,7 +426,10 @@ impl UiMemory {
             confidence: value.confidence,
             source: value.source.clone().unwrap_or_else(|| "inferred".into()),
             preference_score: value.preference_score,
-            active: value.status == "confirmed",
+            // Proposed memories are intentionally visible and usable. They
+            // are not a hidden or paused record; only an explicit dismissal
+            // makes a memory inactive in the UI.
+            active: value.status != "dismissed",
             created_at: value.created_at.clone(),
             updated_at: value.updated_at.clone(),
         }
@@ -647,31 +652,36 @@ pub struct UiAgentMessage {
 
 impl From<&AgentMessage> for UiAgentMessage {
     fn from(value: &AgentMessage) -> Self {
-        let tools = value.tool_name.as_ref().map(|name| {
-            let payload = value.tool_payload.as_ref();
-            vec![UiToolActivity {
-                id: value.item_id.clone().unwrap_or_else(|| value.id.clone()),
-                name: name.clone(),
-                label: tool_label(name).into(),
-                status: payload
-                    .and_then(|value| value.get("status"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("success")
-                    .into(),
-                detail: payload
-                    .and_then(|value| value.get("detail"))
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned),
-                recipe_id: payload
-                    .and_then(|value| value.get("recipeId"))
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned),
-                recipe_title: payload
-                    .and_then(|value| value.get("recipeTitle"))
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned),
-            }]
-        });
+        let payload = value.tool_payload.as_ref();
+        let tools = payload
+            .and_then(|payload| payload.get("tools"))
+            .and_then(|tools| serde_json::from_value::<Vec<UiToolActivity>>(tools.clone()).ok())
+            .or_else(|| {
+                value.tool_name.as_ref().map(|name| {
+                    vec![UiToolActivity {
+                        id: value.item_id.clone().unwrap_or_else(|| value.id.clone()),
+                        name: name.clone(),
+                        label: tool_label(name).into(),
+                        status: payload
+                            .and_then(|value| value.get("status"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("success")
+                            .into(),
+                        detail: payload
+                            .and_then(|value| value.get("detail"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned),
+                        recipe_id: payload
+                            .and_then(|value| value.get("recipeId"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned),
+                        recipe_title: payload
+                            .and_then(|value| value.get("recipeTitle"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned),
+                    }]
+                })
+            });
         Self {
             id: value.item_id.clone().unwrap_or_else(|| value.id.clone()),
             role: value.role.clone(),

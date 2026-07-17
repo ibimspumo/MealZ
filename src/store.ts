@@ -18,6 +18,7 @@ interface AppStore extends BootstrapData {
   view: ViewId;
   loading: boolean;
   agentStatus: "idle" | "thinking" | "streaming";
+  activeAgentMessageId?: string;
   agentDraft: string;
   agentCapabilities: AgentCapabilities;
   selectedRecipeId?: string;
@@ -76,6 +77,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   view: "today",
   loading: true,
   agentStatus: "idle",
+  activeAgentMessageId: undefined,
   agentDraft: "",
   agentCapabilities: { webSearch: "unknown", imageGeneration: "unknown" },
   selectedRecipeId: undefined,
@@ -92,14 +94,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setCalendarRange: async (weekStart, weekEnd) => {
     const length = differenceInCalendarDays(new Date(`${weekEnd}T12:00:00`), new Date(`${weekStart}T12:00:00`));
     if (!weekStart || !weekEnd || length < 0 || length > 30) { get().toast("error", "Ungültiger Zeitraum", "Wähle einen Bereich von höchstens 31 Tagen."); return; }
-    set({ weekStart, weekEnd, loading: true });
+    // Calendar range refreshes are in-place. A global skeleton would unmount the
+    // calendar (and immediately trigger another range refresh) on every revisit.
+    set({ weekStart, weekEnd });
     try {
       const plan = await api.getWeekPlan(weekStart, weekEnd);
       set({ plan });
     } catch (error) {
       get().toast("error", "Woche konnte nicht geladen werden", String(error));
-    } finally {
-      set({ loading: false });
     }
   },
   loadShoppingRange: async (shoppingStart, shoppingEnd) => {
@@ -124,31 +126,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (event.type === "message_delta") {
           set((state) => {
             const exists = state.messages.some((message) => message.id === event.messageId);
-            if (exists) return { messages: state.messages.map((message) => message.id === event.messageId ? { ...message, content: message.content + event.delta, streaming: true } : message) };
-            const pendingTools = [...state.messages].reverse().find((message) => message.role === "assistant" && message.streaming)?.tools;
-            return { messages: [...state.messages.filter((message) => !(message.role === "assistant" && message.streaming && !message.content)), { id: event.messageId, role: "assistant", content: event.delta, createdAt: new Date().toISOString(), streaming: true, tools: pendingTools }] };
+            if (exists) return { activeAgentMessageId: event.messageId, agentStatus: "streaming", messages: state.messages.map((message) => message.id === event.messageId ? { ...message, content: message.content + event.delta, streaming: true } : message) };
+            const pending = state.activeAgentMessageId ? state.messages.find((message) => message.id === state.activeAgentMessageId) : undefined;
+            if (pending) return { activeAgentMessageId: event.messageId, agentStatus: "streaming", messages: state.messages.map((message) => message.id === pending.id ? { ...message, id: event.messageId, content: `${message.content}${event.delta}`, streaming: true } : message) };
+            return { activeAgentMessageId: event.messageId, agentStatus: "streaming", messages: [...state.messages, { id: event.messageId, role: "assistant", content: event.delta, createdAt: new Date().toISOString(), streaming: true }] };
           });
         }
         if (event.type === "message_completed") {
           set((state) => {
-            const pending = state.messages.find((message) => message.id === event.message.id) ?? [...state.messages].reverse().find((message) => message.role === "assistant" && message.streaming);
+            const pending = state.messages.find((message) => message.id === event.message.id) ?? (state.activeAgentMessageId ? state.messages.find((message) => message.id === state.activeAgentMessageId) : undefined);
             const finalMessage = { ...pending, ...event.message, streaming: false, tools: event.message.tools?.length ? event.message.tools : pending?.tools, recipeId: event.message.recipeId ?? pending?.recipeId, recipeTitle: event.message.recipeTitle ?? pending?.recipeTitle };
             return {
             messages: [...state.messages.filter((message) => message.id !== event.message.id && !(message.role === "assistant" && message.streaming)), finalMessage],
-            agentStatus: "idle",
+            // Codex may emit an assistant message, continue with tools, and only
+            // finish the turn later. Keep the global busy state until the
+            // explicit turn/completed status event arrives.
+            agentStatus: state.agentStatus === "idle" ? "idle" : "thinking",
+            activeAgentMessageId: undefined,
           }; });
         }
         if (event.type === "tool_started") {
           set((state) => {
-            const pending = [...state.messages].reverse().find((message) => message.role === "assistant" && (message.streaming || message.tools?.length));
+            const pending = state.activeAgentMessageId ? state.messages.find((message) => message.id === state.activeAgentMessageId) : undefined;
             if (pending) {
-              return { messages: state.messages.map((message) => message.id === pending.id ? { ...message, tools: [...(message.tools ?? []).filter((tool) => tool.id !== event.activity.id), event.activity] } : message) };
+              return { agentStatus: "thinking", messages: state.messages.map((message) => message.id === pending.id ? { ...message, tools: [...(message.tools ?? []).filter((tool) => tool.id !== event.activity.id), event.activity] } : message) };
             }
-            return { messages: [...state.messages, { id: `stream-${crypto.randomUUID()}`, role: "assistant", content: "", createdAt: new Date().toISOString(), streaming: true, tools: [event.activity] }] };
+            const id = `stream-${crypto.randomUUID()}`;
+            return { activeAgentMessageId: id, agentStatus: "thinking", messages: [...state.messages, { id, role: "assistant", content: "", createdAt: new Date().toISOString(), streaming: true, tools: [event.activity] }] };
           });
         }
         if (event.type === "tool_completed") {
-          set((state) => ({ messages: state.messages.map((message) => message.role === "assistant" && message.tools?.some((tool) => tool.id === event.activity.id) ? { ...message, tools: [...(message.tools ?? []).filter((tool) => tool.id !== event.activity.id), event.activity], recipeId: event.activity.recipeId ?? message.recipeId, recipeTitle: event.activity.recipeTitle ?? message.recipeTitle } : message) }));
+          set((state) => ({ messages: state.messages.map((message) => message.id === state.activeAgentMessageId || message.tools?.some((tool) => tool.id === event.activity.id) ? { ...message, tools: [...(message.tools ?? []).filter((tool) => tool.id !== event.activity.id), event.activity], recipeId: event.activity.recipeId ?? message.recipeId, recipeTitle: event.activity.recipeTitle ?? message.recipeTitle } : message) }));
         }
         if (event.type === "data_changed") {
           const refresh = ++bootstrapRefreshSequence;
@@ -263,19 +271,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   sendMessage: async (content) => {
     const optimistic: AgentMessage = { id: `user-${crypto.randomUUID()}`, role: "user", content, createdAt: new Date().toISOString() };
-    set((state) => ({ messages: [...state.messages, optimistic], agentStatus: "thinking" }));
+    set((state) => ({ messages: [...state.messages, optimistic], agentStatus: "thinking", activeAgentMessageId: undefined }));
     try {
       const reply = await api.agentSend(content);
-      if (reply) set((state) => ({ messages: [...state.messages, reply], agentStatus: "idle" }));
+      if (reply) set((state) => ({ messages: [...state.messages, reply], agentStatus: "idle", activeAgentMessageId: undefined }));
     } catch (error) {
-      set({ agentStatus: "idle" });
+      set({ agentStatus: "idle", activeAgentMessageId: undefined });
       get().toast("error", "Nachricht nicht gesendet", String(error));
       throw error;
     }
   },
   newThread: async () => {
-    await api.agentNewThread();
-    set({ messages: [] });
+    const data = await api.agentNewThread();
+    set({ ...data, activeAgentMessageId: undefined, agentStatus: "idle" });
     get().toast("success", "Neues Gespräch gestartet");
   },
   stopAgent: async () => {

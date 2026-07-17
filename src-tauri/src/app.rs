@@ -116,7 +116,7 @@ const TOOL_MANIFEST_META_KEY: &str = "codex_dynamic_tools_manifest";
 // Dynamic tools are persisted inside Codex rollouts. Bump this deliberately
 // whenever their semantic contract changes, even if serialized JSON happens
 // to be identical, so an old rollout cannot keep an obsolete tool set.
-const TOOL_MANIFEST_VERSION: u32 = 3;
+const TOOL_MANIFEST_VERSION: u32 = 4;
 
 fn tool_manifest_fingerprint(definitions: &[DynamicToolSpec]) -> Result<String, String> {
     let encoded = serde_json::to_string(definitions).map_err(|error| error.to_string())?;
@@ -295,7 +295,7 @@ Vor jeder größeren Planung rufst du profile_get_context und memory_recall auf.
 
 Für eine normale kommende Woche planst du Montag bis Sonntag, meist sieben unterschiedliche Hauptgerichte ohne Frühstück. Unter der Woche bevorzugst du schnelle Abendküche, am Wochenende darf es aufwendiger sein. Mealprep-Wiederverwendung ist willkommen, wenn sie wirklich sinnvoll ist. Bei Webrecherche vergleichst du verlässliche Rezeptquellen, nennst die Quelle im Recipe-Objekt und speicherst nur strukturierte Zutaten, Schritte, Portionen und nachvollziehbare Nährwerte. Gute vorhandene Rezepte sollen wiederverwendet werden, besonders wenn sie lange nicht gekocht und gut bewertet wurden.
 
-Wenn die Person ein Rezept finden, generieren oder erstellen lassen möchte, lieferst du nicht nur Fließtext: Nach nötiger Recherche MUSST du recipes_save für ein vollständiges strukturiertes Rezept verwenden. Jedes recherchierte oder generierte Rezept benötigt ein Bild. Übernimm bevorzugt eine belastbare http(s)-Bild-URL der Originalquelle in recipes_save. Fehlt sie, rufe zuerst recipe_image_generation_prepare mit der recipeId auf und nutze dann die native Codex App Server imageGeneration. MealZ verbindet das Ergebnis sicher mit genau diesem Rezept. Wenn recipes_save imageComplete=false liefert, ist requiredNextAction verpflichtend und du darfst den Turn vorher nicht beenden. In deiner finalen Antwort nennst du immer den gespeicherten Rezepttitel und die recipeId.
+Wenn die Person ein neues Rezept finden, generieren oder erstellen lassen möchte, beginne zwingend mit Webrecherche und vergleiche mindestens zwei belastbare Rezeptquellen, bevor du recipes_save verwendest. Die Recherche muss über die native Websuche erfolgen und dadurch als Webrecherche sichtbar werden. Speichere die verglichenen Quellen im Recipe-Objekt. Ausnahme: Die Person verlangt ausdrücklich die Wiederverwendung oder kleine Anpassung eines bereits lokal gespeicherten, bestätigten Favoriten. Dann liest du zuerst recipes_get und darfst ohne neue Websuche fortfahren. Liefere niemals nur Fließtext: Nach der nötigen Recherche MUSST du recipes_save für ein vollständiges strukturiertes Rezept verwenden. Jedes recherchierte oder generierte Rezept benötigt ein Bild. Übernimm bevorzugt eine belastbare http(s)-Bild-URL der Originalquelle in recipes_save. Fehlt sie, rufe zuerst recipe_image_generation_prepare mit der recipeId auf und nutze dann die native Codex App Server imageGeneration. MealZ verbindet das Ergebnis sicher mit genau diesem Rezept. Wenn recipes_save imageComplete=false liefert, ist requiredNextAction verpflichtend und du darfst den Turn vorher nicht beenden. In deiner finalen Antwort nennst du immer den gespeicherten Rezepttitel und die recipeId.
 
 Wenn die Nutzerabsicht eindeutig ist, darfst du sichere Änderungen direkt ausführen; große oder irreversible Abweichungen erläuterst du kurz. Jede Aktion bleibt über die MealZ-Daten und Undo-Historie nachvollziehbar.
 
@@ -678,7 +678,7 @@ fn forward_agent_event(
             if !success {
                 activity.detail = Some("Strukturierter Tool-Aufruf fehlgeschlagen".into());
             }
-            persist_activity(store, &activity);
+            persist_activity(store, &activity, call.turn_id.as_deref());
             emit_activity(app, activity);
             if success {
                 let _ = app.emit(
@@ -739,7 +739,11 @@ fn forward_agent_event(
                             json!({"type":"data_changed","areas":["recipes"]}),
                         );
                     }
-                    persist_activity(store, &activity);
+                    persist_activity(
+                        store,
+                        &activity,
+                        params.get("turnId").and_then(Value::as_str),
+                    );
                     emit_activity(app, activity);
                 }
                 if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
@@ -900,28 +904,34 @@ fn activity_for_server_item(item: &Value, lifecycle: &str) -> Option<crate::ui::
     })
 }
 
-fn persist_activity(store: &MealzStore, activity: &crate::ui::UiToolActivity) {
+fn persist_activity(
+    store: &MealzStore,
+    activity: &crate::ui::UiToolActivity,
+    turn_id: Option<&str>,
+) {
     let Ok(session) = ensure_agent_session(store) else {
         return;
     };
-    let _ = store.append_agent_message(AgentMessage {
-        id: String::new(),
-        session_id: session.id,
-        // Keep the bridge role union stable. This is an assistant timeline
-        // record with empty text and a visible `tools` payload, not a third
-        // chat-speaker role.
-        role: "assistant".into(),
-        content: String::new(),
-        item_id: Some(activity.id.clone()),
-        tool_name: Some(activity.name.clone()),
-        tool_payload: Some(json!({
+    let Some(turn_id) = turn_id.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    // Keep each completed activity in its chronological position. Grouping an
+    // entire Codex turn into one persisted row makes all tools jump back above
+    // later assistant updates after an app restart.
+    let timeline_key = format!("{turn_id}:{}", activity.id);
+    let _ = store.record_agent_turn_activity(
+        &session.id,
+        &timeline_key,
+        json!({
+            "id":activity.id,
+            "name":activity.name,
+            "label":activity.label,
             "status":activity.status,
             "detail":activity.detail,
             "recipeId":activity.recipe_id,
             "recipeTitle":activity.recipe_title
-        })),
-        created_at: String::new(),
-    });
+        }),
+    );
 }
 
 fn changed_areas(tool: &str) -> Vec<&'static str> {
@@ -1518,7 +1528,7 @@ pub async fn agent_send(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn agent_new_thread(state: State<'_, AppRuntime>) -> Result<(), String> {
+pub async fn agent_new_thread(state: State<'_, AppRuntime>) -> Result<UiBootstrap, String> {
     let store = state.store.clone();
     let metadata = agent_metadata(&store);
     run_db(move || {
@@ -1529,7 +1539,8 @@ pub async fn agent_new_thread(state: State<'_, AppRuntime>) -> Result<(), String
     })
     .await?;
     state.agent.reset_thread().await?;
-    Ok(())
+    let store = state.store.clone();
+    run_db(move || build_bootstrap(&store)).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1751,14 +1762,53 @@ mod tests {
             recipe_id: Some("recipe-123".into()),
             recipe_title: Some("Airfryer-Bowl".into()),
         };
-        persist_activity(&store, &activity);
+        persist_activity(&store, &activity, Some("turn-airfryer"));
+        persist_activity(
+            &store,
+            &crate::ui::UiToolActivity {
+                id: "call-image".into(),
+                name: "imageGeneration".into(),
+                label: "Bild generiert".into(),
+                status: "success".into(),
+                detail: None,
+                recipe_id: Some("recipe-123".into()),
+                recipe_title: Some("Airfryer-Bowl".into()),
+            },
+            Some("turn-airfryer"),
+        );
         let session = ensure_agent_session(&store).unwrap();
         let stored = store.list_agent_messages(&session.id, 10).unwrap();
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].role, "assistant");
+        assert_eq!(stored.len(), 2);
+        assert!(stored.iter().all(|message| message.role == "assistant"));
         let ui = UiAgentMessage::from(&stored[0]);
-        let tool = ui.tools.unwrap().remove(0);
+        assert_eq!(ui.id, "turn-airfryer:call-save");
+        let mut tools = ui.tools.unwrap();
+        assert_eq!(tools.len(), 1);
+        let tool = tools.remove(0);
         assert_eq!(tool.recipe_id.as_deref(), Some("recipe-123"));
         assert_eq!(tool.recipe_title.as_deref(), Some("Airfryer-Bowl"));
+    }
+
+    #[test]
+    fn proposed_memories_are_active_until_explicitly_dismissed() {
+        let proposed = Memory {
+            id: "memory-proposed".into(),
+            kind: "preference".into(),
+            content: "Mag knusprige Kichererbsen.".into(),
+            confidence: 0.7,
+            evidence: vec![],
+            status: "proposed".into(),
+            preference_score: Some(8.0),
+            source: Some("agent".into()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            last_used_at: None,
+        };
+        assert!(UiMemory::from_domain(&proposed).active);
+        let dismissed = Memory {
+            status: "dismissed".into(),
+            ..proposed
+        };
+        assert!(!UiMemory::from_domain(&dismissed).active);
     }
 }

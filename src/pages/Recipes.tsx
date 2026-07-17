@@ -22,6 +22,8 @@ export function Recipes() {
   const [rating, setRating] = useState<Recipe | null>(null);
   const selectedRecipeId = useAppStore((state) => state.selectedRecipeId);
   const setSelectedRecipeId = useAppStore((state) => state.setSelectedRecipeId);
+  const toast = useAppStore((state) => state.toast);
+  const [deletingRecipeId, setDeletingRecipeId] = useState<string | null>(null);
   useEffect(() => {
     if (!selectedRecipeId) return;
     const next = recipes.find((recipe) => recipe.id === selectedRecipeId);
@@ -39,8 +41,10 @@ export function Recipes() {
 
   const remove = async (recipe: Recipe) => {
     if (!window.confirm(`„${recipe.title}“ wirklich löschen? Geplante Einträge werden ebenfalls entfernt.`)) return;
-    await deleteRecipe(recipe.id);
-    setDetail(null);
+    setDeletingRecipeId(recipe.id);
+    try { await deleteRecipe(recipe.id); setDetail(null); }
+    catch (error) { toast("error", "Rezept konnte nicht gelöscht werden", String(error)); }
+    finally { setDeletingRecipeId(null); }
   };
 
   const regenerate = (recipe: Recipe) => {
@@ -65,7 +69,7 @@ export function Recipes() {
         <EmptyState icon={<Search size={24} />} title="Kein passendes Rezept" action={<Button onClick={() => { setQuery(""); setFilter("alle"); }}>Filter zurücksetzen</Button>}><p>Probiere einen anderen Suchbegriff oder lass Mila ein neues Rezept entwickeln.</p></EmptyState>
       )}
 
-      <RecipeDetail recipe={detail} onClose={() => setDetail(null)} onEdit={(recipe) => { setDetail(null); setEditing(recipe); }} onDelete={remove} onRate={(recipe) => { setDetail(null); setRating(recipe); }} onRegenerate={regenerate} />
+      <RecipeDetail recipe={detail} deleting={detail?.id === deletingRecipeId} onClose={() => setDetail(null)} onEdit={(recipe) => { setDetail(null); setEditing(recipe); }} onDelete={remove} onRate={(recipe) => { setDetail(null); setRating(recipe); }} onRegenerate={regenerate} />
       <RecipeEditor recipe={editing} onClose={() => setEditing(null)} onSave={async (recipe) => { const saved = await saveRecipe(recipe); setEditing(null); setDetail(saved); }} />
       <RatingDialog recipe={rating} onClose={() => setRating(null)} onSave={async (stars, comment) => { if (rating) await rateRecipe(rating.id, stars, comment); setRating(null); setDetail(null); }} />
     </div>
@@ -81,7 +85,7 @@ function RecipeCard({ recipe, onOpen, onFavorite }: { recipe: Recipe; onOpen: ()
           <span className="recipe-card__tags">{recipe.tags.slice(0, 2).map((tag) => <em key={tag}>{tag}</em>)}</span>
           <strong>{recipe.title}</strong>
           <small>{recipe.description}</small>
-          <span className="recipe-card__footer"><span><Clock3 size={14} />{recipe.prepMinutes + recipe.cookMinutes} Min.</span><span><UsersRound size={14} />{recipe.servings}</span><span>{recipe.nutrition.protein} g Protein</span></span>
+          <span className="recipe-card__footer"><span><Clock3 size={14} />{recipe.prepMinutes + recipe.cookMinutes} Min.</span><span><UsersRound size={14} />{recipe.servings}</span><span>{Math.round(recipe.nutrition.protein)} g Protein</span></span>
         </span>
       </button>
       <IconButton className={`favorite-button ${recipe.favorite ? "is-active" : ""}`} label={recipe.favorite ? "Aus Favoriten entfernen" : "Als Favorit speichern"} onClick={onFavorite}><Heart size={17} fill={recipe.favorite ? "currentColor" : "none"} /></IconButton>
@@ -89,10 +93,10 @@ function RecipeCard({ recipe, onOpen, onFavorite }: { recipe: Recipe; onOpen: ()
   );
 }
 
-function RecipeDetail({ recipe, onClose, onEdit, onDelete, onRate, onRegenerate }: { recipe: Recipe | null; onClose: () => void; onEdit: (recipe: Recipe) => void; onDelete: (recipe: Recipe) => void; onRate: (recipe: Recipe) => void; onRegenerate: (recipe: Recipe) => void }) {
+function RecipeDetail({ recipe, deleting, onClose, onEdit, onDelete, onRate, onRegenerate }: { recipe: Recipe | null; deleting: boolean; onClose: () => void; onEdit: (recipe: Recipe) => void; onDelete: (recipe: Recipe) => void; onRate: (recipe: Recipe) => void; onRegenerate: (recipe: Recipe) => void }) {
   if (!recipe) return null;
   return (
-    <Modal open onClose={onClose} title={recipe.title} size="large" footer={<><Button tone="danger" icon={<Trash2 size={15} />} onClick={() => onDelete(recipe)}>Löschen</Button><span className="modal__footer-spacer" /><Button icon={<Star size={15} />} onClick={() => onRate(recipe)}>Bewerten</Button><Button icon={<Sparkles size={15} />} onClick={() => onRegenerate(recipe)}>Neu interpretieren</Button><Button tone="primary" icon={<Pencil size={15} />} onClick={() => onEdit(recipe)}>Bearbeiten</Button></>}>
+    <Modal open onClose={onClose} title={recipe.title} size="large" footer={<><Button tone="danger" icon={<Trash2 size={15} />} disabled={deleting} onClick={() => onDelete(recipe)}>{deleting ? "Wird gelöscht …" : "Löschen"}</Button><span className="modal__footer-spacer" /><Button icon={<Star size={15} />} disabled={deleting} onClick={() => onRate(recipe)}>Bewerten</Button><Button icon={<Sparkles size={15} />} disabled={deleting} onClick={() => onRegenerate(recipe)}>Neu interpretieren</Button><Button tone="primary" icon={<Pencil size={15} />} disabled={deleting} onClick={() => onEdit(recipe)}>Bearbeiten</Button></>}>
       <div className="recipe-detail">
         <div className="recipe-detail__hero"><SafeRecipeImage src={recipe.imageUrl} alt={`Serviervorschlag für ${recipe.title}`} fallback={<span><ChefHat size={36} /></span>} /><div>{recipe.tags.map((tag) => <em key={tag}>{tag}</em>)}</div></div>
         <p className="recipe-detail__lead">{recipe.description}</p>

@@ -102,6 +102,84 @@ describe("MealZ app flows", () => {
     await waitFor(() => expect(useAppStore.getState().recipes.find((recipe) => recipe.id === "r-lasagna")?.ratingComment).toContain("weniger Käse"));
   });
 
+  it("keeps the recipe dialog open and reports a failed deletion", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "deleteRecipe").mockRejectedValueOnce(new Error("Lokale Datenbank nicht erreichbar"));
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    await user.click(screen.getByRole("button", { name: /^Rezepte/ }));
+    await user.click(screen.getByRole("button", { name: "Timos Lasagne öffnen" }));
+    await user.click(screen.getByRole("button", { name: "Löschen" }));
+    expect(await screen.findByText("Rezept konnte nicht gelöscht werden")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Timos Lasagne" })).toBeInTheDocument();
+  });
+
+  it("reports a failed new-chat request without clearing the visible conversation", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "agentNewThread").mockRejectedValueOnce(new Error("Codex App Server nicht erreichbar"));
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
+    await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
+    expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Neues Gespräch" }));
+    expect(await screen.findByText("Neues Gespräch konnte nicht gestartet werden")).toBeInTheDocument();
+    expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
+  });
+
+  it("keeps the agent surface fixed while only the message list scrolls", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
+    await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
+    expect(document.querySelector(".workspace")).toHaveClass("workspace--fixed");
+    expect(document.querySelector(".page--agent .messages")).toBeInTheDocument();
+  });
+
+  it("reloads the current calendar range every time the calendar is opened", async () => {
+    const user = userEvent.setup();
+    const rangeSpy = vi.spyOn(api, "getWeekPlan");
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    await user.click(screen.getByRole("button", { name: /Wochenplan/ }));
+    await waitFor(() => expect(rangeSpy).toHaveBeenCalledWith(useAppStore.getState().weekStart, useAppStore.getState().weekEnd));
+    const firstCount = rangeSpy.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: /^Rezepte/ }));
+    await user.click(screen.getByRole("button", { name: /Wochenplan/ }));
+    await waitFor(() => expect(rangeSpy.mock.calls.length).toBeGreaterThan(firstCount));
+  });
+
+  it("opens full recipe details from calendar and agenda cards without leaving the plan", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    await user.click(screen.getByRole("button", { name: /Wochenplan/ }));
+    const calendarCard = (await screen.findAllByRole("button", { name: /öffnen$/ }))[0];
+    await user.click(calendarCard);
+    expect(screen.getByText("Rezeptdetails aus deinem Kalender")).toBeInTheDocument();
+    expect(screen.getByText("Zutaten")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Wochenplan" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Fertig" }));
+    await user.click(screen.getByRole("button", { name: "Agenda" }));
+    const agendaCard = screen.getAllByRole("button", { name: /öffnen$/ })[0];
+    expect(within(agendaCard).getByText(/Orzo, Spinat und Feta in einer würzigen Tomatensauce/)).toBeInTheDocument();
+    expect(within(agendaCard).getByText("628")).toBeInTheDocument();
+    expect(within(agendaCard).getByText("25 g")).toBeInTheDocument();
+    await user.click(agendaCard);
+    expect(screen.getByText("Rezeptdetails aus deinem Kalender")).toBeInTheDocument();
+  });
+
+  it("does not open calendar details when removing a planned recipe", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    await user.click(screen.getByRole("button", { name: /Wochenplan/ }));
+    const removeButton = (await screen.findAllByRole("button", { name: /entfernen$/ }))[0];
+    await user.click(removeButton);
+    expect(screen.queryByText("Rezeptdetails aus deinem Kalender")).not.toBeInTheDocument();
+  });
+
   it("sends a message to the browser demo agent and renders structured tool activity", async () => {
     const user = userEvent.setup();
     render(<App />);

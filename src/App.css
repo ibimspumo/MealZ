@@ -79,8 +79,11 @@ p { text-wrap: pretty; }
 .sidebar__profile { border-top: 1px solid var(--line); border-radius: 0 0 var(--radius-sm) var(--radius-sm); padding-top: 13px; }
 .sidebar__profile > svg:last-child { color: var(--muted); }
 .workspace { position: relative; min-width: 0; height: 100%; overflow: auto; background: var(--bg); }
+.workspace--fixed { overflow: hidden; }
 .workspace__drag { position: fixed; z-index: var(--z-sticky); left: var(--sidebar-width); right: 0; top: 0; height: 24px; }
 .page { width: min(100%, 1540px); min-height: 100%; margin: 0 auto; padding: 44px clamp(24px, 3vw, 48px) 64px; }
+.page--agent { display: flex; height: 100%; min-height: 0; flex-direction: column; padding-bottom: 24px; }
+.page--agent .page-header { flex: 0 0 auto; }
 .page--loading { padding-top: 80px; }
 .page-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 27px; }
 .page-header h1 { margin-bottom: 6px; font-size: 29px; line-height: 1.12; font-weight: 750; }
@@ -179,6 +182,8 @@ p { text-wrap: pretty; }
 .day-column--today > header strong { background: var(--moss); color: white; }
 .day-column__meals { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 .plan-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border-radius: var(--radius-sm); background: var(--surface-raised); box-shadow: 0 1px 4px oklch(0.25 0.03 150 / .11); }
+.plan-card--interactive { cursor: pointer; }
+.plan-card--interactive:hover { box-shadow: 0 3px 8px oklch(0.25 0.03 150 / .16); }
 .plan-card__image { position: relative; height: 104px; display: grid; place-items: center; flex: 0 0 auto; color: var(--moss); background: var(--surface-strong); }
 .plan-card__image img { width: 100%; height: 100%; object-fit: cover; }
 .plan-card__content { display: flex; min-width: 0; flex-direction: column; padding: 10px 10px 7px; background: var(--surface-raised); }
@@ -188,6 +193,7 @@ p { text-wrap: pretty; }
 .plan-card__meta span { display: flex; align-items: center; gap: 3px; }
 .plan-card__note { margin: -2px 0 8px; color: var(--coral); font-size: 10px; }
 .plan-card__actions { display: flex; align-items: center; justify-content: space-between; min-height: 29px; margin-top: auto; padding: 6px 0 0; border-top: 1px solid var(--line); }
+.plan-card__actions > span { color: var(--moss); font-size: 10px; font-weight: 750; }
 .plan-card__actions > button:first-child { display: inline-flex; align-items: center; gap: 3px; padding: 0; background: transparent; color: var(--moss); font-size: 10px; font-weight: 750; }
 .plan-card__actions .icon-button { width: 24px; height: 24px; }
 .week-agenda { display: flex; flex-direction: column; gap: 10px; }
@@ -200,9 +206,17 @@ p { text-wrap: pretty; }
 .agenda-day > header h2 { margin: 2px 0 0; font-size: 17px; }
 .agenda-day > header > strong { padding: 4px 7px; border-radius: 999px; background: var(--moss); color: white; font-size: 10px; }
 .agenda-day__items { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px; }
-.agenda-day__items .plan-card { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); border: 1px solid var(--line); box-shadow: none; }
-.agenda-day__items .plan-card__image { width: 100%; height: 100%; min-height: 132px; }
-.agenda-day__items .plan-card__content { padding: 14px 16px 10px; }
+.agenda-day__items .plan-card--agenda { display: grid; grid-template-columns: minmax(210px, 278px) minmax(0, 1fr); min-height: 196px; border: 1px solid var(--line); box-shadow: none; }
+.agenda-day__items .plan-card--agenda .plan-card__image { width: 100%; height: 100%; min-height: 196px; }
+.agenda-day__items .plan-card--agenda .plan-card__content { justify-content: center; padding: 15px 18px 12px; }
+.plan-card--agenda h3 { margin-bottom: 5px; font-size: 15px; }
+.plan-card--agenda .plan-card__meta { padding-bottom: 8px; font-size: 11px; }
+.plan-card__description { display: -webkit-box; overflow: hidden; margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.plan-card--agenda .nutrition-strip { margin: 0 0 9px; padding: 8px 0; }
+.plan-card--agenda .nutrition-strip > div { padding: 0 8px; }
+.plan-card--agenda .nutrition-strip dt { font-size: 9px; }
+.plan-card--agenda .nutrition-strip dd { font-size: 11px; }
+.plan-card--agenda .plan-card__actions { min-height: 28px; margin-top: 0; }
 .agenda-empty { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 72px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; }
 .agenda-empty:hover { border-color: var(--moss); background: var(--moss-faint); color: var(--moss); }
 .empty-slot { width: 100%; min-height: 104px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 9px; font-weight: 650; }
@@ -239,8 +253,8 @@ p { text-wrap: pretty; }
 .recipe-card { position: relative; min-width: 0; overflow: hidden; border-radius: var(--radius-md); background: var(--surface); box-shadow: 0 1px 5px oklch(0.25 0.03 150 / .1); transition: transform 180ms cubic-bezier(.2,.8,.2,1), box-shadow 180ms ease; }
 .recipe-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px oklch(0.25 0.03 150 / .11); }
 .recipe-card__open { width: 100%; padding: 0; background: transparent; text-align: left; }
-.recipe-card__image { position: relative; display: grid; place-items: center; height: 168px; color: var(--moss); background: var(--surface-strong); }
-.recipe-card__image img { width: 100%; height: 100%; object-fit: cover; }
+.recipe-card__image { position: relative; display: grid; place-items: center; height: 168px; max-height: 168px; overflow: hidden; color: var(--moss); background: var(--surface-strong); }
+.recipe-card__image img { width: 100%; height: 100%; min-height: 168px; object-fit: cover; }
 .recipe-card__rating { position: absolute; left: 10px; top: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border-radius: 999px; background: oklch(0.21 0.03 150 / .87); color: white; font-size: 9px; font-weight: 700; }
 .recipe-card__body { display: block; padding: 14px; }
 .recipe-card__tags { display: flex; gap: 5px; min-height: 20px; margin-bottom: 7px; }
@@ -357,7 +371,7 @@ p { text-wrap: pretty; }
 .shopping-row__amount { padding-left: 10px; color: var(--ink-soft); font-size: 10px; font-weight: 700; }
 .shopping-row.is-checked strong, .shopping-row.is-checked .shopping-row__amount { color: var(--muted); text-decoration: line-through; }
 
-.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 15px; height: calc(100vh - 142px); min-height: 520px; }
+.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; flex: 1; min-height: 0; gap: 15px; }
 .chat-panel { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
 .chat-panel__status { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-height: 59px; padding: 9px 13px; border-bottom: 1px solid var(--line); }
 .agent-avatar--large { width: 38px; height: 38px; }
@@ -403,7 +417,7 @@ p { text-wrap: pretty; }
 .composer__send:hover { background: var(--moss-hover); color: white; }
 .composer__send--stop { background: var(--coral); }
 .composer-wrap > p { margin: 6px 2px 0; color: var(--ink-soft); font-size: 10.5px; }
-.context-panel { display: flex; flex-direction: column; gap: 10px; }
+.context-panel { display: flex; min-height: 0; flex-direction: column; gap: 10px; overflow-y: auto; }
 .context-panel > section { padding: 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
 .context-panel header { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--moss); }
 .context-panel h3 { margin: 0; color: var(--ink); font-size: 13px; }

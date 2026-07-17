@@ -56,7 +56,7 @@ export function AppShell({ children }: PropsWithChildren) {
           <Settings2 size={16} />
         </button>
       </aside>
-      <main className="workspace">
+      <main className={`workspace ${view === "agent" ? "workspace--fixed" : ""}`}>
         <div className="workspace__drag" data-tauri-drag-region />
         {children}
       </main>

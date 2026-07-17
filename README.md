@@ -152,7 +152,7 @@ Bitte behandle die App nicht als medizinische Beratung. Nährwerte und Zielwerte
 
 ### Projektstatus
 
-MealZ befindet sich in aktiver Entwicklung (`0.1.0`, Alpha) und ist derzeit auf die persönliche Nutzung unter macOS ausgerichtet. Datenmodelle und interne Schnittstellen können sich noch ändern. Rezeptbilder werden aus belastbaren Quellen übernommen oder über die native Bildgenerierung des Codex App Servers erzeugt und lokal zwischengespeichert. Web- oder Mobile-Clients sowie notarisiert verteilte Releases sind mögliche spätere Ausbaustufen.
+MealZ befindet sich in aktiver Entwicklung (`0.1.1`, Alpha) und ist derzeit auf die persönliche Nutzung unter macOS ausgerichtet. Datenmodelle und interne Schnittstellen können sich noch ändern. Rezeptbilder werden aus belastbaren Quellen übernommen oder über die native Bildgenerierung des Codex App Servers erzeugt und lokal zwischengespeichert. Web- oder Mobile-Clients sowie notarisiert verteilte Releases sind mögliche spätere Ausbaustufen.
 
 ### Mitwirken
 

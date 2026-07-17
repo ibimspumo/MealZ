@@ -305,13 +305,18 @@ impl MealzStore {
         let transaction = connection.transaction()?;
         let before = read_recipe(&transaction, id)?;
         let affected_dates = planned_date_bounds_for_recipe(&transaction, id)?;
+        let planned_entries = read_plan_entries_for_recipe(&transaction, id)?;
+        // A deleted recipe must not leave blank plan slots behind. Do this in
+        // the same transaction and keep a compound undo snapshot so a single
+        // undo restores both the recipe and its scheduled appearances.
+        transaction.execute("DELETE FROM plan_entries WHERE recipe_id=?1", [id])?;
         transaction.execute("DELETE FROM recipes WHERE id=?1", [id])?;
         record_undo(
             &transaction,
-            "recipe",
+            "recipe_with_plan",
             id,
             "delete",
-            Some(serde_json::to_value(before)?),
+            Some(json!({"recipe":before,"planEntries":planned_entries})),
             None,
         )?;
         transaction.commit()?;
@@ -776,7 +781,7 @@ impl MealzStore {
             recipe_ids: Vec::new(),
             note,
             created_at: now.clone(),
-            updated_at: now,
+            updated_at: now.clone(),
         };
         write_shopping_item(&transaction, &item)?;
         record_undo(
@@ -996,10 +1001,18 @@ impl MealzStore {
             status: "active".into(),
             metadata,
             created_at: now.clone(),
-            updated_at: now,
+            updated_at: now.clone(),
         };
-        let connection = self.conn();
-        connection.execute(
+        let mut connection = self.conn();
+        let transaction = connection.transaction()?;
+        // Exactly one conversation is current. Previous transcripts stay in
+        // SQLite as archived history, but cannot accidentally receive new
+        // thread IDs or tool activity.
+        transaction.execute(
+            "UPDATE agent_sessions SET status='archived', updated_at=?1 WHERE status='active'",
+            [&now],
+        )?;
+        transaction.execute(
             "INSERT INTO agent_sessions(id, codex_thread_id, title, status, metadata_json, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -1012,6 +1025,7 @@ impl MealzStore {
                 session.updated_at
             ],
         )?;
+        transaction.commit()?;
         Ok(session)
     }
 
@@ -1179,6 +1193,108 @@ impl MealzStore {
                 message.created_at
             ],
         )?;
+        Ok(message)
+    }
+
+    /// Adds or updates a visible activity in one stable timeline slot. The
+    /// caller chooses the slot key so activities can remain chronologically
+    /// interleaved with assistant messages after reload.
+    pub fn record_agent_turn_activity(
+        &self,
+        session_id: &str,
+        timeline_id: &str,
+        activity: Value,
+    ) -> DomainResult<AgentMessage> {
+        if timeline_id.trim().is_empty() {
+            return Err(DomainError::Validation(
+                "Tool-Aktivität benötigt eine Turn-ID".into(),
+            ));
+        }
+        let mut connection = self.conn();
+        let transaction = connection.transaction()?;
+        let existing = transaction
+            .query_row(
+                "SELECT id, tool_payload_json, created_at FROM agent_messages
+                 WHERE session_id=?1 AND item_id=?2 AND tool_name='turn_timeline'
+                 ORDER BY created_at DESC LIMIT 1",
+                params![session_id, timeline_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let mut tools = existing
+            .as_ref()
+            .and_then(|value| value.1.as_deref())
+            .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+            .and_then(|payload| payload.get("tools").cloned())
+            .and_then(|tools| tools.as_array().cloned())
+            .unwrap_or_default();
+        let activity_id = activity
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if let Some(position) = tools
+            .iter()
+            .position(|item| item.get("id").and_then(Value::as_str) == Some(activity_id))
+        {
+            tools[position] = activity;
+        } else {
+            tools.push(activity);
+        }
+        let payload = serde_json::to_string(&json!({"tools":tools}))?;
+        let now = now_rfc3339();
+        let message = if let Some((id, _, created_at)) = existing {
+            transaction.execute(
+                "UPDATE agent_messages SET tool_payload_json=?2 WHERE id=?1",
+                params![id, payload],
+            )?;
+            AgentMessage {
+                id,
+                session_id: session_id.into(),
+                role: "assistant".into(),
+                content: String::new(),
+                item_id: Some(timeline_id.into()),
+                tool_name: Some("turn_timeline".into()),
+                tool_payload: Some(json!({"tools":tools})),
+                created_at,
+            }
+        } else {
+            let message = AgentMessage {
+                id: new_id("message"),
+                session_id: session_id.into(),
+                role: "assistant".into(),
+                content: String::new(),
+                item_id: Some(timeline_id.into()),
+                tool_name: Some("turn_timeline".into()),
+                tool_payload: Some(json!({"tools":tools})),
+                created_at: now.clone(),
+            };
+            transaction.execute(
+                "INSERT INTO agent_messages(id, session_id, role, content, item_id, tool_name, tool_payload_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    message.id,
+                    message.session_id,
+                    message.role,
+                    message.content,
+                    message.item_id,
+                    message.tool_name,
+                    payload,
+                    message.created_at
+                ],
+            )?;
+            message
+        };
+        transaction.execute(
+            "UPDATE agent_sessions SET updated_at=?2 WHERE id=?1",
+            params![session_id, now],
+        )?;
+        transaction.commit()?;
         Ok(message)
     }
 
@@ -2158,6 +2274,19 @@ fn read_plan_entries(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+fn read_plan_entries_for_recipe(
+    conn: &Connection,
+    recipe_id: &str,
+) -> DomainResult<Vec<PlanEntry>> {
+    let mut statement = conn.prepare(
+        "SELECT id, date, slot, recipe_id, title_override, servings, status, notes,
+                sort_order, created_at, updated_at
+         FROM plan_entries WHERE recipe_id=?1 ORDER BY date, sort_order, slot",
+    )?;
+    let rows = statement.query_map([recipe_id], row_plan_entry)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn build_week(
     conn: &Connection,
     week_start: NaiveDate,
@@ -2472,6 +2601,28 @@ fn apply_undo(transaction: &Transaction<'_>, record: &UndoRecord) -> DomainResul
                 save_recipe_tx(transaction, recipe, false)?;
             } else {
                 transaction.execute("DELETE FROM recipes WHERE id=?1", [&record.entity_id])?;
+            }
+        }
+        "recipe_with_plan" => {
+            let snapshot = record
+                .before
+                .clone()
+                .ok_or_else(|| DomainError::Validation("Undo-Snapshot fehlt".into()))?;
+            let recipe: Recipe = serde_json::from_value(
+                snapshot
+                    .get("recipe")
+                    .cloned()
+                    .ok_or_else(|| DomainError::Validation("Rezept-Snapshot fehlt".into()))?,
+            )?;
+            let entries: Vec<PlanEntry> = serde_json::from_value(
+                snapshot
+                    .get("planEntries")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            )?;
+            save_recipe_tx(transaction, recipe, false)?;
+            for entry in entries {
+                save_plan_entry_tx(transaction, entry, false)?;
             }
         }
         "rating" => restore_or_delete(transaction, record, "recipe_ratings", |conn, value| {

@@ -1,6 +1,6 @@
 [package]
 name = "mealz"
-version = "0.1.0"
+version = "0.1.1"
 description = "A personal, local-first meal planning companion powered by Codex App Server"
 authors = ["Timo Corvinus"]
 edition = "2024"

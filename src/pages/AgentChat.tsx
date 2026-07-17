@@ -26,9 +26,16 @@ export function AgentChat() {
   const recipes = useAppStore((state) => state.recipes);
   const setSelectedRecipeId = useAppStore((state) => state.setSelectedRecipeId);
   const agentCapabilities = useAppStore((state) => state.agentCapabilities);
+  const toast = useAppStore((state) => state.toast);
   const [text, setText] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, agentStatus]);
+  const [startingNewThread, setStartingNewThread] = useState(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (!container) return;
+    if (typeof container.scrollTo === "function") container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    else container.scrollTop = container.scrollHeight;
+  }, [messages, agentStatus]);
   useEffect(() => { if (agentDraft) { setText(agentDraft); setAgentDraft(""); } }, [agentDraft, setAgentDraft]);
   const submit = async () => {
     const content = text.trim();
@@ -36,14 +43,21 @@ export function AgentChat() {
     setText("");
     try { await sendMessage(content); } catch { setText(content); }
   };
+  const startNewThread = async () => {
+    if (messages.length && !window.confirm("Neues Gespräch starten? Der bisherige Verlauf bleibt lokal gespeichert.")) return;
+    setStartingNewThread(true);
+    try { await newThread(); }
+    catch (error) { toast("error", "Neues Gespräch konnte nicht gestartet werden", String(error)); }
+    finally { setStartingNewThread(false); }
+  };
 
   return (
     <div className="page page--agent">
-      <PageHeader title={profile.agentName || "Mila"} description="Dein persönlicher Meal-Planning-Agent · Codex App Server" actions={<Button icon={<MessageSquarePlus size={16} />} onClick={() => { if (messages.length && !window.confirm("Neues Gespräch starten? Der bisherige Verlauf bleibt lokal gespeichert.")) return; newThread(); }}>Neues Gespräch</Button>} />
+      <PageHeader title={profile.agentName || "Mila"} description="Dein persönlicher Meal-Planning-Agent · Codex App Server" actions={<Button icon={<MessageSquarePlus size={16} />} disabled={startingNewThread} onClick={startNewThread}>{startingNewThread ? "Starte Gespräch …" : "Neues Gespräch"}</Button>} />
       <div className="chat-layout">
         <section className="chat-panel">
           <header className="chat-panel__status"><span className={`agent-avatar agent-avatar--large ${agentStatus !== "idle" ? "is-busy" : ""}`}><Sparkles size={20} /></span><div><strong>{profile.agentName || "Mila"}</strong><small>{agentStatus === "idle" ? "Bereit · kennt deinen Plan und deine Vorlieben" : agentStatus === "thinking" ? "Denkt nach und prüft deinen Kontext …" : "Antwortet gerade …"}</small></div><span className="codex-badge">Codex App Server</span></header>
-          <div className="messages" aria-live="polite">
+          <div className="messages" ref={messagesRef} aria-live="polite">
             {!messages.length && <div className="chat-welcome"><span><Sparkles size={25} /></span><h2>Was möchtest du essen?</h2><p>Frag nach einer ganzen Woche, einem einzelnen Rezept oder ändere gemeinsam mit mir deinen bestehenden Plan.</p><div>{suggestions.map((suggestion) => <button key={suggestion} onClick={() => setText(suggestion)}>{suggestion}</button>)}</div></div>}
             {messages.map((message) => (
               <article className={`message message--${message.role}`} key={message.id}>
@@ -51,12 +65,11 @@ export function AgentChat() {
                 <div className="message__content">
                   {message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => href ? <ExternalLink href={href}>{children}</ExternalLink> : <>{children}</> }}>{message.content}</ReactMarkdown> : <p>{message.content}</p>}
                   {message.tools?.length ? <ToolTimeline tools={message.tools} /> : null}
-                  <RecipeResultCard recipe={recipes.find((recipe) => recipe.id === message.recipeId || recipe.title === message.recipeTitle || message.tools?.some((tool) => tool.name === "recipes_save" && (tool.recipeId === recipe.id || tool.recipeTitle === recipe.title)))} onOpen={(id) => { setSelectedRecipeId(id); setView("recipes"); }} />
+                  <RecipeResultCard recipe={message.tools?.some((tool) => tool.name === "recipes_save") ? recipes.find((recipe) => recipe.id === message.recipeId || recipe.title === message.recipeTitle || message.tools?.some((tool) => tool.name === "recipes_save" && (tool.recipeId === recipe.id || tool.recipeTitle === recipe.title))) : undefined} onOpen={(id) => { setSelectedRecipeId(id); setView("recipes"); }} />
                 </div>
               </article>
             ))}
             {agentStatus === "thinking" && <article className="message message--assistant"><span className="message__avatar"><Sparkles size={15} /></span><div className="thinking-indicator"><i /><i /><i /><span>Kontext wird geprüft</span></div></article>}
-            <div ref={bottomRef} />
           </div>
           <footer className="composer-wrap">
             <div className="composer">

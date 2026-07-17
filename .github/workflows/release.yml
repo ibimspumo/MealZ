@@ -33,7 +33,15 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: MealZ v__VERSION__
-          releaseBody: "MealZ 0.1.0 für Macs mit Apple Silicon."
+          releaseBody: |
+            MealZ v__VERSION__ für Macs mit Apple Silicon.
+
+            - Turngenaue, sichtbare Agenten-Aktivitäten mit Webrecherche und Bildstatus
+            - Reparierter Start eines neuen Gesprächs und aktives Memory-Verhalten
+            - Rezeptlöschung, Kalender-Aktualisierung und begrenzte Rezeptbilder
+            - Klickbare Kalenderkarten mit Detailmodal und informativer Agenda
+            - Fixierte Agentenansicht mit intern scrollendem Nachrichtenverlauf
+            - Isolierte Development-Datenbank zum Schutz persönlicher Live-Daten
           releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin

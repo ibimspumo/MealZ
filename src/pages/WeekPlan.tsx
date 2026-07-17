@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { addDays, differenceInCalendarDays, format, isSameDay, parseISO, startOfWeek } from "date-fns";
 import { de } from "date-fns/locale";
-import { ArrowRight, CalendarPlus, ChevronLeft, ChevronRight, Clock3, CookingPot, MapPin, Minus, Plus, Sparkles, Trash2, UsersRound } from "lucide-react";
-import { Button, EmptyState, IconButton, Modal, PageHeader, SafeRecipeImage } from "../components/Common";
+import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, CookingPot, ExternalLink as ExternalLinkIcon, MapPin, Minus, Plus, Sparkles, Trash2, UsersRound } from "lucide-react";
+import { Button, EmptyState, ExternalLink, IconButton, Modal, NutritionStrip, PageHeader, SafeRecipeImage, formatAmount } from "../components/Common";
 import { DateRangePicker } from "../components/DateRangePicker";
 import { useAppStore } from "../store";
 import type { MealType, PlanItem, Recipe } from "../types";
@@ -27,10 +27,13 @@ export function WeekPlan() {
   const [entryMode, setEntryMode] = useState<"recipe" | "eating_out">("recipe");
   const [customTitle, setCustomTitle] = useState("Auswärts essen");
   const [layout, setLayout] = useState<"calendar" | "agenda">("calendar");
+  const [detailRecipe, setDetailRecipe] = useState<Recipe | null>(null);
   const start = parseISO(weekStart);
   const end = parseISO(weekEnd);
   const days = useMemo(() => Array.from({ length: differenceInCalendarDays(end, start) + 1 }, (_, index) => addDays(start, index)), [end, start]);
   const rangeDays = days.length;
+
+  useEffect(() => { void setCalendarRange(weekStart, weekEnd); }, []);
 
   const navigate = (direction: number) => setCalendarRange(format(addDays(start, direction * rangeDays), "yyyy-MM-dd"), format(addDays(end, direction * rangeDays), "yyyy-MM-dd"));
   const beginEditing = (date: string) => { setEntryMode("recipe"); setCustomTitle("Auswärts essen"); setEditingDay(date); };
@@ -78,7 +81,7 @@ export function WeekPlan() {
               </header>
               <div className="day-column__meals">
                 {items.map((item) => (
-                  <PlanCard item={item} onOpen={() => setView("recipes")} onRemove={() => removePlanItem(item.id)} key={item.id} />
+                  <PlanCard variant="calendar" item={item} onOpen={setDetailRecipe} onRemove={() => removePlanItem(item.id)} key={item.id} />
                 ))}
                 {!items.length && (
                   <button className="empty-slot" onClick={() => beginEditing(dateKey)}>
@@ -92,7 +95,7 @@ export function WeekPlan() {
         })}
       </div></div> : <section className="week-agenda" aria-label="Agenda des ausgewählten Zeitraums">{days.map((date) => {
         const dateKey = format(date, "yyyy-MM-dd"); const items = plan.filter((item) => item.date === dateKey); const today = isSameDay(date, new Date());
-        return <article className={`agenda-day ${today ? "agenda-day--today" : ""}`} key={dateKey}><header><div><span>{format(date, "EEEE", { locale: de })}</span><h2>{format(date, "d. MMMM", { locale: de })}</h2></div>{today && <strong>Heute</strong>}<Button tone="quiet" icon={<Plus size={15} />} onClick={() => beginEditing(dateKey)}>Eintrag</Button></header><div className="agenda-day__items">{items.length ? items.map((item) => <PlanCard item={item} onOpen={() => setView("recipes")} onRemove={() => removePlanItem(item.id)} key={item.id} />) : <button className="agenda-empty" onClick={() => beginEditing(dateKey)}><Plus size={16} />Gericht oder Termin hinzufügen</button>}</div></article>;
+        return <article className={`agenda-day ${today ? "agenda-day--today" : ""}`} key={dateKey}><header><div><span>{format(date, "EEEE", { locale: de })}</span><h2>{format(date, "d. MMMM", { locale: de })}</h2></div>{today && <strong>Heute</strong>}<Button tone="quiet" icon={<Plus size={15} />} onClick={() => beginEditing(dateKey)}>Eintrag</Button></header><div className="agenda-day__items">{items.length ? items.map((item) => <PlanCard variant="agenda" item={item} onOpen={setDetailRecipe} onRemove={() => removePlanItem(item.id)} key={item.id} />) : <button className="agenda-empty" onClick={() => beginEditing(dateKey)}><Plus size={16} />Gericht oder Termin hinzufügen</button>}</div></article>;
       })}</section>}
 
       {!plan.length && <EmptyState icon={<CookingPot size={25} />} title="Die Woche wartet auf Ideen" action={<Button tone="primary" onClick={askForWeek}>Mit Mila planen</Button>}><p>Lass sieben passende Hauptgerichte erstellen oder trage selbst deine Favoriten ein.</p></EmptyState>}
@@ -104,16 +107,24 @@ export function WeekPlan() {
           {entryMode === "recipe" ? <><fieldset className="recipe-picker"><legend>Rezept auswählen</legend>{recipes.map((recipe) => <RecipeChoice key={recipe.id} recipe={recipe} selected={recipe.id === selectedRecipe} onSelect={() => setSelectedRecipe(recipe.id)} />)}</fieldset><div className="serving-stepper"><span>Portionen</span><div><IconButton label="Eine Portion weniger" onClick={() => setServings(Math.max(1, servings - 1))}><Minus size={15} /></IconButton><strong>{servings}</strong><IconButton label="Eine Portion mehr" onClick={() => setServings(servings + 1)}><Plus size={15} /></IconButton></div></div></> : <label className="field"><span>Was steht an?</span><input autoFocus value={customTitle} onChange={(event) => setCustomTitle(event.target.value)} placeholder="z. B. Abendessen im Restaurant" /></label>}
         </div>
       </Modal>
+      <CalendarRecipeDetail recipe={detailRecipe} onClose={() => setDetailRecipe(null)} />
     </div>
   );
 }
 
-function PlanCard({ item, onOpen, onRemove }: { item: PlanItem; onOpen: () => void; onRemove: () => void }) {
+function PlanCard({ variant, item, onOpen, onRemove }: { variant: "calendar" | "agenda"; item: PlanItem; onOpen: (recipe: Recipe) => void; onRemove: () => void }) {
   const title = item.recipe?.title ?? item.titleOverride ?? item.title ?? "Ohne Rezept";
-  return <div className="plan-card">
+  const open = () => { if (item.recipe) onOpen(item.recipe); };
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => { if (!item.recipe || (event.key !== "Enter" && event.key !== " ")) return; event.preventDefault(); open(); };
+  return <article className={`plan-card plan-card--${variant} ${item.recipe ? "plan-card--interactive" : ""}`} role={item.recipe ? "button" : undefined} tabIndex={item.recipe ? 0 : undefined} aria-label={item.recipe ? `${title} öffnen` : undefined} onClick={item.recipe ? open : undefined} onKeyDown={onKeyDown}>
     <div className="plan-card__image"><SafeRecipeImage src={item.recipe?.imageUrl} alt={item.recipe ? `Serviervorschlag für ${item.recipe.title}` : ""} fallback={item.status === "eating_out" ? <MapPin size={22} /> : <CookingPot size={22} />} /></div>
-    <div className="plan-card__content"><span className="plan-card__type">{item.status === "eating_out" ? "Auswärts" : mealLabels[item.mealType]}</span><h3>{title}</h3>{item.recipe && <div className="plan-card__meta"><span><Clock3 size={13} />{item.recipe.prepMinutes + item.recipe.cookMinutes} Min.</span><span><UsersRound size={13} />{item.servings}</span></div>}{item.note && <p className="plan-card__note">{item.note}</p>}<div className="plan-card__actions">{item.recipe && <button onClick={onOpen}>Öffnen <ArrowRight size={13} /></button>}<IconButton label={`${title} entfernen`} onClick={onRemove}><Trash2 size={14} /></IconButton></div></div>
-  </div>;
+    <div className="plan-card__content"><span className="plan-card__type">{item.status === "eating_out" ? "Auswärts" : mealLabels[item.mealType]}</span><h3>{title}</h3>{item.recipe && <div className="plan-card__meta"><span><Clock3 size={13} />{item.recipe.prepMinutes + item.recipe.cookMinutes} Min.</span><span><UsersRound size={13} />{item.servings}</span></div>}{variant === "agenda" && item.recipe?.description && <p className="plan-card__description">{item.recipe.description}</p>}{variant === "agenda" && item.recipe && <NutritionStrip nutrition={item.recipe.nutrition} compact />}{item.note && <p className="plan-card__note">{item.note}</p>}<div className="plan-card__actions"><span>{item.recipe ? "Details öffnen" : ""}</span><IconButton label={`${title} entfernen`} onClick={(event) => { event.stopPropagation(); onRemove(); }}><Trash2 size={14} /></IconButton></div></div>
+  </article>;
+}
+
+function CalendarRecipeDetail({ recipe, onClose }: { recipe: Recipe | null; onClose: () => void }) {
+  if (!recipe) return null;
+  return <Modal open onClose={onClose} title={recipe.title} description="Rezeptdetails aus deinem Kalender" size="large" footer={<Button tone="primary" onClick={onClose}>Fertig</Button>}><div className="recipe-detail"><div className="recipe-detail__hero"><SafeRecipeImage src={recipe.imageUrl} alt={`Serviervorschlag für ${recipe.title}`} fallback={<span><CookingPot size={36} /></span>} /><div>{recipe.tags.map((tag) => <em key={tag}>{tag}</em>)}</div></div><p className="recipe-detail__lead">{recipe.description}</p><div className="recipe-detail__facts"><span><Clock3 size={16} /><strong>{recipe.prepMinutes + recipe.cookMinutes} Min.</strong><small>{recipe.prepMinutes} Min. Vorbereitung</small></span><span><UsersRound size={16} /><strong>{recipe.servings} Portionen</strong><small>einfach skalierbar</small></span></div><NutritionStrip nutrition={recipe.nutrition} /><div className="recipe-detail__columns"><section><h3>Zutaten</h3><ul className="ingredient-list">{recipe.ingredients.map((ingredient) => <li key={ingredient.id}><span>{ingredient.name}{ingredient.optional && <small>optional</small>}</span><strong>{formatAmount(ingredient.amount)} {ingredient.unit}</strong></li>)}</ul></section><section><h3>Zubereitung</h3><ol className="step-list">{recipe.steps.map((step, index) => <li key={`${index}-${step.slice(0, 8)}`}><span>{index + 1}</span><p>{step}</p></li>)}</ol></section></div>{recipe.sourceUrl && <ExternalLink className="source-link" href={recipe.sourceUrl}><ExternalLinkIcon size={15} />Quelle: {recipe.sourceName ?? recipe.sourceUrl}</ExternalLink>}</div></Modal>;
 }
 
 function RecipeChoice({ recipe, selected, onSelect }: { recipe: Recipe; selected: boolean; onSelect: () => void }) {

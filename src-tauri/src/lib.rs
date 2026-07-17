@@ -35,7 +35,21 @@ pub fn run() {
                     }
                     path
                 }
-                None => tauri_app.path().app_data_dir()?,
+                None => {
+                    let live_data_dir = tauri_app.path().app_data_dir()?;
+                    // `tauri dev` must never reuse Timo's real local plans,
+                    // memories, or Codex thread. Release builds keep the
+                    // normal AppData location; tests can still opt into an
+                    // explicit absolute MEALZ_DATA_DIR above.
+                    #[cfg(debug_assertions)]
+                    {
+                        live_data_dir.join("dev")
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        live_data_dir
+                    }
+                }
             };
             std::fs::create_dir_all(&data_dir)?;
             let recipe_media_dir = data_dir.join("recipe-media");

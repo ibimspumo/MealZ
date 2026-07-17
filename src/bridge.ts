@@ -217,8 +217,9 @@ export const api = {
       return structuredClone(assistant);
     }),
   agentNewThread: () =>
-    tauriOrDemo<void>("agent_new_thread", {}, () => {
+    tauriOrDemo<BootstrapData>("agent_new_thread", {}, () => {
       demo.messages = [];
+      return structuredClone(demo);
     }),
   agentStop: () => tauriOrDemo<void>("agent_stop", {}, () => undefined),
   onAgentEvent: async (handler: (event: AgentEvent) => void): Promise<UnlistenFn> => {

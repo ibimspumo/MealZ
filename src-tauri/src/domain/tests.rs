@@ -318,6 +318,29 @@ fn codex_thread_id_has_a_store_level_persistence_api() {
 }
 
 #[test]
+fn creating_a_new_agent_session_archives_the_previous_current_session() {
+    let store = MealzStore::in_memory().unwrap();
+    let first = store
+        .set_current_codex_thread_id(Some("thread-old".into()))
+        .unwrap();
+    let second = store
+        .create_agent_session(None, "Neues Gespräch".into(), json!({"agentName":"Mila"}))
+        .unwrap();
+    assert_ne!(first.id, second.id);
+    assert_eq!(
+        store.current_agent_session().unwrap().unwrap().id,
+        second.id
+    );
+    let old_messages = store.list_agent_messages(&first.id, 10).unwrap();
+    assert!(old_messages.is_empty());
+    let current = store
+        .set_current_codex_thread_id(Some("thread-new".into()))
+        .unwrap();
+    assert_eq!(current.id, second.id);
+    assert_eq!(current.codex_thread_id.as_deref(), Some("thread-new"));
+}
+
+#[test]
 fn pantry_exclusions_are_applied_on_every_rebuild() {
     let store = MealzStore::in_memory().unwrap();
     let recipe = store.save_recipe(test_recipe("Vorratstest")).unwrap();
@@ -437,6 +460,10 @@ fn saving_or_deleting_a_planned_recipe_rebuilds_an_existing_range_list() {
             .iter()
             .any(|item| item.name == "Kartoffeln")
     );
+    assert!(store.get_plan_range(monday, monday).unwrap().is_empty());
+    store.undo_last().unwrap();
+    assert_eq!(store.get_plan_range(monday, monday).unwrap().len(), 1);
+    assert!(store.get_recipe(&recipe.id).is_ok());
 }
 
 #[test]

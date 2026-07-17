@@ -23,6 +23,16 @@
 
 MealZ ist eine persönliche Tauri-2-Desktop-App für macOS. Sie verbindet Wochenplanung, Rezeptkatalog, Einkaufsliste und ein transparentes Memory-System mit einem dauerhaft persönlichen Meal-Planning-Agenten. Das Projekt ist Open Source, wird aber bewusst für einen einzelnen lokalen Nutzer statt für einen Multi-Tenant-SaaS optimiert.
 
+### Download auf macOS öffnen
+
+Der aktuelle Apple-Silicon-Build ist updater-signiert, aber noch nicht mit einer Apple Developer ID notarisiert. Verschiebe `MealZ.app` zuerst in den Programme-Ordner und führe anschließend diesen Befehl im Terminal aus:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/MealZ.app"
+```
+
+Der Befehl entfernt ausschließlich das macOS-Quarantäne-Attribut von `MealZ.app`. Falls macOS wegen fehlender Rechte ablehnt, kann derselbe Befehl einmalig mit `sudo` ausgeführt werden. Verwende ihn nur für den offiziellen [MealZ-Release](https://github.com/ibimspumo/MealZ/releases/latest), dessen Herkunft du geprüft hast.
+
 ### Was MealZ kann
 
 - **Onboarding:** Geführte Ersteinrichtung für Name, Nährwertrahmen, Kochalltag, Equipment, Vorlieben und Agentenpersönlichkeit. Das Onboarding kann in den Einstellungen erneut gestartet oder im Chat abgeschlossen werden.

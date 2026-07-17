@@ -240,6 +240,36 @@ impl CodexAgent {
         self.ensure_session_locked().await
     }
 
+    /// Switch the running host to the thread of the conversation that the
+    /// application's ThreadStore has already selected. Unlike `reset_thread`,
+    /// this never clears a persisted thread id, so archived conversations can
+    /// be resumed later without losing their Codex rollout.
+    pub async fn switch_to_persisted_thread(
+        &self,
+        thread_id: Option<String>,
+    ) -> Result<SessionInfo, String> {
+        let _operation = self.inner.operation.lock().await;
+        let mut state = self.inner.state.lock().await;
+        if let Some(turn_id) = state.active_turn_id.as_deref() {
+            return Err(format!(
+                "Das Gespräch kann nicht gewechselt werden, solange Antwort {turn_id} läuft. Bitte die Antwort zuerst stoppen."
+            ));
+        }
+        let previous_thread_id = state.thread_id.clone();
+        *state = SessionState {
+            thread_id,
+            generation: 0,
+            active_turn_id: None,
+        };
+        drop(state);
+        if let Some(connection) = self.inner.host.alive().await
+            && let Some(previous_thread_id) = previous_thread_id
+        {
+            connection.unregister_thread(&previous_thread_id);
+        }
+        self.ensure_session_locked().await
+    }
+
     /// Apply personality/model/instruction changes by restarting only the
     /// App Server process and resuming the same durable thread.
     pub async fn reconfigure(&self, config: AgentConfig) -> Result<SessionInfo, String> {

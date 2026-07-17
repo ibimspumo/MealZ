@@ -4,6 +4,8 @@ import { createDemoBootstrap } from "./demo-data";
 import type {
   AgentEvent,
   AgentCapabilities,
+  AgentConversation,
+  AgentConversationResult,
   AgentFiles,
   AgentMessage,
   BootstrapData,
@@ -17,6 +19,16 @@ import type {
 const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const wait = (ms = 180) => new Promise((resolve) => window.setTimeout(resolve, ms));
 let demo = createDemoBootstrap();
+let demoConversations: AgentConversation[] = [{
+  id: "demo-conversation-main",
+  title: "MealZ Chat",
+  status: "active",
+  active: true,
+  messageCount: demo.messages.length,
+  preview: demo.messages[demo.messages.length - 1]?.content,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+}];
 let demoAgentFiles: AgentFiles = {
   persona: "# PERSONA.md\n\nDu bist die persönliche Meal-Planning-Begleiterin des Nutzers. Du bist direkt, aufmerksam und pragmatisch.\n\n## Sprachregeln\n\n- Antworte auf Deutsch.\n- Verwende niemals Em-Dashes (Unicode U+2014). Nutze stattdessen Punkte, Kommas oder Doppelpunkte.\n- Erkläre Abwägungen kurz und konkret.\n",
   memory: "# MEMORY.md\n\nLangzeitkontext, der zusätzlich zu den strukturierten Erinnerungen in MealZ an jeden relevanten Turn übergeben wird.\n",
@@ -221,7 +233,29 @@ export const api = {
       demo.messages = [];
       return structuredClone(demo);
     }),
+  listAgentConversations: () =>
+    tauriOrDemo<AgentConversation[]>("list_agent_conversations", {}, () => structuredClone(demoConversations)),
+  agentCreateConversation: () =>
+    tauriOrDemo<AgentConversationResult>("agent_create_conversation", {}, () => {
+      demoConversations = demoConversations.map((conversation) => ({ ...conversation, status: "archived" as const, active: false }));
+      const now = new Date().toISOString();
+      const conversation: AgentConversation = {
+        id: makeId("conversation"), title: "Neues MealZ-Gespräch", status: "active", active: true,
+        messageCount: 0, createdAt: now, updatedAt: now,
+      };
+      demoConversations.unshift(conversation);
+      demo.messages = [];
+      return { action: "created", conversation: structuredClone(conversation), bootstrap: structuredClone(demo), resumed: false, serverVersion: "demo" };
+    }),
+  agentActivateConversation: (sessionId: string) =>
+    tauriOrDemo<AgentConversationResult>("agent_activate_conversation", { sessionId }, () => {
+      const conversation = demoConversations.find((entry) => entry.id === sessionId);
+      if (!conversation) throw new Error("Gespräch nicht gefunden");
+      demoConversations = demoConversations.map((entry) => ({ ...entry, status: entry.id === sessionId ? "active" as const : "archived" as const, active: entry.id === sessionId }));
+      return { action: "activated", conversation: structuredClone({ ...conversation, status: "active" as const, active: true }), bootstrap: structuredClone(demo), resumed: true, serverVersion: "demo" };
+    }),
   agentStop: () => tauriOrDemo<void>("agent_stop", {}, () => undefined),
+  agentCompactContext: () => tauriOrDemo<void>("agent_compact_context", {}, async () => { await wait(350); }),
   onAgentEvent: async (handler: (event: AgentEvent) => void): Promise<UnlistenFn> => {
     if (!isTauri()) return () => undefined;
     return listen<AgentEvent>("agent:event", ({ payload }) => handler(payload));
@@ -230,6 +264,12 @@ export const api = {
 
 export const resetDemo = (onboardingComplete = false) => {
   demo = createDemoBootstrap(onboardingComplete);
+  const now = new Date().toISOString();
+  demoConversations = [{
+    id: "demo-conversation-main", title: "MealZ Chat", status: "active", active: true,
+    messageCount: demo.messages.length, preview: demo.messages[demo.messages.length - 1]?.content,
+    createdAt: now, updatedAt: now,
+  }];
   demoAgentFiles = {
     persona: "# PERSONA.md\n\nDu bist die persönliche Meal-Planning-Begleiterin des Nutzers. Du bist direkt, aufmerksam und pragmatisch.\n\n## Sprachregeln\n\n- Antworte auf Deutsch.\n- Verwende niemals Em-Dashes (Unicode U+2014). Nutze stattdessen Punkte, Kommas oder Doppelpunkte.\n- Erkläre Abwägungen kurz und konkret.\n",
     memory: "# MEMORY.md\n\nLangzeitkontext, der zusätzlich zu den strukturierten Erinnerungen in MealZ an jeden relevanten Turn übergeben wird.\n",

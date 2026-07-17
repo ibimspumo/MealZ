@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    AgentMessage, Equipment, Memory, Nutrition, PlanEntry, Recipe, RecipeImage, RecipeIngredient,
-    RecipeRating, RecipeSource, RecipeStep, ShoppingItem, UserProfile,
+    AgentMessage, AgentSessionSummary, Equipment, Memory, Nutrition, PlanEntry, Recipe,
+    RecipeImage, RecipeIngredient, RecipeRating, RecipeSource, RecipeStep, ShoppingItem,
+    UserProfile,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -650,6 +651,46 @@ pub struct UiAgentMessage {
     pub tools: Option<Vec<UiToolActivity>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UiAgentConversation {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub active: bool,
+    pub thread_id: Option<String>,
+    pub message_count: usize,
+    pub preview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<&AgentSessionSummary> for UiAgentConversation {
+    fn from(value: &AgentSessionSummary) -> Self {
+        let preview = value.preview.as_deref().map(|text| {
+            let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut characters = normalized.chars();
+            let shortened = characters.by_ref().take(140).collect::<String>();
+            if characters.next().is_some() {
+                format!("{shortened}…")
+            } else {
+                shortened
+            }
+        });
+        Self {
+            id: value.session.id.clone(),
+            title: value.session.title.clone(),
+            status: value.session.status.clone(),
+            active: value.session.status == "active",
+            thread_id: value.session.codex_thread_id.clone(),
+            message_count: value.message_count,
+            preview,
+            created_at: value.session.created_at.clone(),
+            updated_at: value.session.updated_at.clone(),
+        }
+    }
+}
+
 impl From<&AgentMessage> for UiAgentMessage {
     fn from(value: &AgentMessage) -> Self {
         let payload = value.tool_payload.as_ref();
@@ -724,6 +765,16 @@ pub struct UiBootstrap {
     pub memories: Vec<UiMemory>,
     pub profile: UiProfile,
     pub messages: Vec<UiAgentMessage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiAgentConversationResult {
+    pub action: String,
+    pub conversation: UiAgentConversation,
+    pub bootstrap: UiBootstrap,
+    pub resumed: bool,
+    pub server_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

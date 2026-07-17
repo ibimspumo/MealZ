@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatDistanceToNowStrict } from "date-fns";
 import { de } from "date-fns/locale";
-import { BookOpen, Check, ChefHat, Clock3, ExternalLink as ExternalLinkIcon, Filter, Heart, Pencil, Plus, Search, Sparkles, Star, Trash2, UsersRound, X } from "lucide-react";
+import { BookOpen, Check, ChefHat, CircleAlert, Clock3, ExternalLink as ExternalLinkIcon, Filter, Heart, Pencil, Plus, Search, Sparkles, Star, Trash2, UsersRound, X } from "lucide-react";
 import { Button, EmptyState, ExternalLink, IconButton, Modal, NutritionStrip, PageHeader, SafeRecipeImage, formatAmount } from "../components/Common";
 import { useAppStore } from "../store";
 import type { Ingredient, MealType, Recipe } from "../types";
@@ -24,6 +24,8 @@ export function Recipes() {
   const setSelectedRecipeId = useAppStore((state) => state.setSelectedRecipeId);
   const toast = useAppStore((state) => state.toast);
   const [deletingRecipeId, setDeletingRecipeId] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<Recipe | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   useEffect(() => {
     if (!selectedRecipeId) return;
     const next = recipes.find((recipe) => recipe.id === selectedRecipeId);
@@ -40,10 +42,10 @@ export function Recipes() {
   }), [filter, query, recipes]);
 
   const remove = async (recipe: Recipe) => {
-    if (!window.confirm(`„${recipe.title}“ wirklich löschen? Geplante Einträge werden ebenfalls entfernt.`)) return;
     setDeletingRecipeId(recipe.id);
-    try { await deleteRecipe(recipe.id); setDetail(null); }
-    catch (error) { toast("error", "Rezept konnte nicht gelöscht werden", String(error)); }
+    setDeleteError("");
+    try { await deleteRecipe(recipe.id); setDetail(null); setDeleteCandidate(null); }
+    catch (error) { const detail = String(error); setDeleteError(detail); toast("error", "Rezept konnte nicht gelöscht werden", detail); }
     finally { setDeletingRecipeId(null); }
   };
 
@@ -69,7 +71,10 @@ export function Recipes() {
         <EmptyState icon={<Search size={24} />} title="Kein passendes Rezept" action={<Button onClick={() => { setQuery(""); setFilter("alle"); }}>Filter zurücksetzen</Button>}><p>Probiere einen anderen Suchbegriff oder lass Mila ein neues Rezept entwickeln.</p></EmptyState>
       )}
 
-      <RecipeDetail recipe={detail} deleting={detail?.id === deletingRecipeId} onClose={() => setDetail(null)} onEdit={(recipe) => { setDetail(null); setEditing(recipe); }} onDelete={remove} onRate={(recipe) => { setDetail(null); setRating(recipe); }} onRegenerate={regenerate} />
+      <RecipeDetail recipe={detail} deleting={detail?.id === deletingRecipeId} onClose={() => setDetail(null)} onEdit={(recipe) => { setDetail(null); setEditing(recipe); }} onDelete={(recipe) => { setDetail(null); setDeleteError(""); setDeleteCandidate(recipe); }} onRate={(recipe) => { setDetail(null); setRating(recipe); }} onRegenerate={regenerate} />
+      <Modal open={Boolean(deleteCandidate)} onClose={() => { if (!deletingRecipeId) { setDetail(deleteCandidate); setDeleteCandidate(null); } }} title="Rezept löschen?" description={deleteCandidate?.title} size="small" footer={<><Button disabled={Boolean(deletingRecipeId)} onClick={() => { setDetail(deleteCandidate); setDeleteCandidate(null); }}>Abbrechen</Button><Button tone="danger" icon={<Trash2 size={15} />} disabled={Boolean(deletingRecipeId)} onClick={() => deleteCandidate && remove(deleteCandidate)}>{deletingRecipeId ? "Wird gelöscht …" : "Rezept endgültig löschen"}</Button></>}>
+        <div className="destructive-confirmation"><CircleAlert size={18} /><div><strong>Geplante Einträge werden ebenfalls entfernt.</strong><p>Die Einkaufsliste wird danach automatisch neu berechnet. Diese Aktion kann über den lokalen Änderungsverlauf rückgängig gemacht werden.</p>{deleteError && <p className="form-error" role="alert">{deleteError}</p>}</div></div>
+      </Modal>
       <RecipeEditor recipe={editing} onClose={() => setEditing(null)} onSave={async (recipe) => { const saved = await saveRecipe(recipe); setEditing(null); setDetail(saved); }} />
       <RatingDialog recipe={rating} onClose={() => setRating(null)} onSave={async (stars, comment) => { if (rating) await rateRecipe(rating.id, stars, comment); setRating(null); setDetail(null); }} />
     </div>

@@ -19,8 +19,8 @@ use crate::{
         RecipeRating,
     },
     ui::{
-        UiAgentFiles, UiAgentMessage, UiBootstrap, UiMemory, UiPlanItem, UiProfile, UiRecipe,
-        UiShoppingItem, tool_label,
+        UiAgentConversation, UiAgentConversationResult, UiAgentFiles, UiAgentMessage, UiBootstrap,
+        UiMemory, UiPlanItem, UiProfile, UiRecipe, UiShoppingItem, tool_label,
     },
 };
 
@@ -652,6 +652,45 @@ fn sanitize_agent_text(text: &str) -> String {
     text.replace('\u{2014}', "-")
 }
 
+fn context_usage_update(params: &Value) -> Option<Value> {
+    let used_tokens = params
+        .pointer("/tokenUsage/last/totalTokens")
+        .and_then(Value::as_u64)?;
+    let total_tokens = params
+        .pointer("/tokenUsage/total/totalTokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(used_tokens);
+    let context_window = params
+        .pointer("/tokenUsage/modelContextWindow")
+        .and_then(Value::as_u64)?;
+    if context_window == 0 {
+        return None;
+    }
+    // Codex reserves 12k tokens for the next model response. Matching that
+    // reserve keeps MealZ's indicator aligned with Codex's own status view.
+    let effective_window = context_window.saturating_sub(12_000).max(1);
+    let effective_used = used_tokens.saturating_sub(12_000);
+    let utilization = ((effective_used as f64 / effective_window as f64) * 100.0).clamp(0.0, 100.0);
+    let remaining = (100.0 - utilization).clamp(0.0, 100.0);
+    let stage = if remaining <= 25.0 {
+        "warning"
+    } else {
+        "healthy"
+    };
+    Some(json!({
+        "type":"context_updated",
+        "context":{
+            "stage":stage,
+            "usedTokens":used_tokens,
+            "totalTokens":total_tokens,
+            "contextWindow":context_window,
+            "utilizationPercent":utilization,
+            "remainingPercent":remaining,
+            "automaticCompaction":true
+        }
+    }))
+}
+
 fn forward_agent_event(
     app: &AppHandle,
     store: &MealzStore,
@@ -709,6 +748,13 @@ fn forward_agent_event(
                 }
             }
             "item/started" => {
+                if params.pointer("/item/type").and_then(Value::as_str) == Some("contextCompaction")
+                {
+                    let _ = app.emit(
+                        "agent:event",
+                        json!({"type":"context_updated","context":{"stage":"compacting","automaticCompaction":true,"detail":"Der Gesprächsverlauf wird automatisch zusammengefasst."}}),
+                    );
+                }
                 if let Some(activity) =
                     activity_for_server_item(params.get("item").unwrap_or(&Value::Null), "running")
                 {
@@ -717,6 +763,12 @@ fn forward_agent_event(
             }
             "item/completed" => {
                 let item = params.get("item").cloned().unwrap_or(Value::Null);
+                if item.get("type").and_then(Value::as_str) == Some("contextCompaction") {
+                    let _ = app.emit(
+                        "agent:event",
+                        json!({"type":"context_updated","context":{"stage":"healthy","automaticCompaction":true,"lastCompactedAt":chrono::Utc::now().to_rfc3339(),"detail":"Der Gesprächsverlauf wurde automatisch verdichtet."}}),
+                    );
+                }
                 let generated_image =
                     if item.get("type").and_then(Value::as_str) == Some("imageGeneration") {
                         finalize_pending_generated_image(store, data_dir, &params, &item).ok()
@@ -780,6 +832,17 @@ fn forward_agent_event(
                     let _ = app.emit("agent:event", json!({"type":"error","message":message}));
                 }
             }
+            "thread/tokenUsage/updated" => {
+                if let Some(update) = context_usage_update(&params) {
+                    let _ = app.emit("agent:event", update);
+                }
+            }
+            "thread/compacted" => {
+                let _ = app.emit(
+                    "agent:event",
+                    json!({"type":"context_updated","context":{"stage":"healthy","automaticCompaction":true,"lastCompactedAt":chrono::Utc::now().to_rfc3339(),"detail":"Der Gesprächsverlauf wurde automatisch verdichtet."}}),
+                );
+            }
             "error" => {
                 let message = params
                     .pointer("/error/message")
@@ -787,6 +850,16 @@ fn forward_agent_event(
                     .and_then(Value::as_str)
                     .unwrap_or("Unbekannter Codex-Fehler");
                 let _ = app.emit("agent:event", json!({"type":"error","message":message}));
+                if params
+                    .pointer("/error/codexErrorInfo")
+                    .and_then(Value::as_str)
+                    == Some("contextWindowExceeded")
+                {
+                    let _ = app.emit(
+                        "agent:event",
+                        json!({"type":"context_updated","context":{"stage":"recommend_new","automaticCompaction":true,"detail":"Das Kontextfenster ist voll. Starte ein neues Gespräch, um sicher weiterzuarbeiten."}}),
+                    );
+                }
             }
             _ => {}
         },
@@ -1527,20 +1600,172 @@ pub async fn agent_send(
     .await
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub async fn agent_new_thread(state: State<'_, AppRuntime>) -> Result<UiBootstrap, String> {
-    let store = state.store.clone();
+fn conversation_summary(
+    store: &MealzStore,
+    session_id: &str,
+) -> Result<UiAgentConversation, String> {
+    store
+        .list_agent_sessions()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|summary| summary.session.id == session_id)
+        .map(UiAgentConversation::from)
+        .ok_or_else(|| "Das Gespräch wurde nach dem Wechsel nicht gefunden".into())
+}
+
+async fn create_conversation(
+    runtime: &AppRuntime,
+    title: Option<String>,
+) -> Result<UiAgentConversationResult, String> {
+    let previous = {
+        let store = runtime.store.clone();
+        run_db(move || {
+            store
+                .current_agent_session()
+                .map_err(|error| error.to_string())
+        })
+        .await?
+    };
+    let store = runtime.store.clone();
     let metadata = agent_metadata(&store);
-    run_db(move || {
+    let requested_title = title
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Neues MealZ-Gespräch".into());
+    let created = run_db(move || {
         store
-            .create_agent_session(None, "Neues MealZ-Gespräch".into(), metadata)
-            .map(|_| ())
+            .create_agent_session(None, requested_title, metadata)
             .map_err(|error| error.to_string())
     })
     .await?;
-    state.agent.reset_thread().await?;
+    // `reset_thread` deliberately interrupts an active turn. Starting a new
+    // conversation is an explicit, confirmed user action, so it must also work
+    // while the previous conversation is still producing a response.
+    let session_info = match runtime.agent.reset_thread().await {
+        Ok(info) => info,
+        Err(error) => {
+            if let Some(previous) = previous {
+                let store = runtime.store.clone();
+                let previous_id = previous.id;
+                let previous_thread_id = previous.codex_thread_id;
+                let _ = run_db(move || {
+                    store
+                        .activate_agent_session(&previous_id)
+                        .map(|_| ())
+                        .map_err(|rollback_error| rollback_error.to_string())
+                })
+                .await;
+                let _ = runtime
+                    .agent
+                    .switch_to_persisted_thread(previous_thread_id)
+                    .await;
+            }
+            return Err(format!(
+                "Neues Gespräch konnte nicht gestartet werden: {error}"
+            ));
+        }
+    };
+    let store = runtime.store.clone();
+    run_db(move || {
+        Ok(UiAgentConversationResult {
+            action: "created".into(),
+            conversation: conversation_summary(&store, &created.id)?,
+            bootstrap: build_bootstrap(&store)?,
+            resumed: session_info.resumed,
+            server_version: session_info.server_version,
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_agent_conversations(
+    state: State<'_, AppRuntime>,
+) -> Result<Vec<UiAgentConversation>, String> {
     let store = state.store.clone();
-    run_db(move || build_bootstrap(&store)).await
+    run_db(move || {
+        store
+            .list_agent_sessions()
+            .map_err(|error| error.to_string())
+            .map(|sessions| sessions.iter().map(UiAgentConversation::from).collect())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn agent_create_conversation(
+    state: State<'_, AppRuntime>,
+    title: Option<String>,
+) -> Result<UiAgentConversationResult, String> {
+    create_conversation(&state, title).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn agent_activate_conversation(
+    state: State<'_, AppRuntime>,
+    session_id: String,
+) -> Result<UiAgentConversationResult, String> {
+    if state.agent.status().await.active_turn_id.is_some() {
+        return Err(
+            "Während Mila antwortet, kann das Gespräch nicht gewechselt werden. Bitte die Antwort zuerst stoppen."
+                .into(),
+        );
+    }
+    let store = state.store.clone();
+    let session_id_for_db = session_id.clone();
+    let (previous, selected) = run_db(move || {
+        let previous = store
+            .current_agent_session()
+            .map_err(|error| error.to_string())?;
+        let selected = store
+            .activate_agent_session(&session_id_for_db)
+            .map_err(|error| error.to_string())?;
+        Ok((previous, selected))
+    })
+    .await?;
+    let session_info = match state
+        .agent
+        .switch_to_persisted_thread(selected.codex_thread_id.clone())
+        .await
+    {
+        Ok(info) => info,
+        Err(error) => {
+            if let Some(previous) = previous {
+                let store = state.store.clone();
+                let previous_id = previous.id;
+                let previous_thread_id = previous.codex_thread_id;
+                let _ = run_db(move || {
+                    store
+                        .activate_agent_session(&previous_id)
+                        .map(|_| ())
+                        .map_err(|rollback_error| rollback_error.to_string())
+                })
+                .await;
+                let _ = state
+                    .agent
+                    .switch_to_persisted_thread(previous_thread_id)
+                    .await;
+            }
+            return Err(format!("Gespräch konnte nicht geöffnet werden: {error}"));
+        }
+    };
+    let store = state.store.clone();
+    run_db(move || {
+        Ok(UiAgentConversationResult {
+            action: "activated".into(),
+            conversation: conversation_summary(&store, &session_id)?,
+            bootstrap: build_bootstrap(&store)?,
+            resumed: session_info.resumed,
+            server_version: session_info.server_version,
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn agent_new_thread(state: State<'_, AppRuntime>) -> Result<UiBootstrap, String> {
+    create_conversation(&state, None)
+        .await
+        .map(|result| result.bootstrap)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1549,6 +1774,14 @@ pub async fn agent_stop(state: State<'_, AppRuntime>) -> Result<(), String> {
         state.agent.interrupt().await?;
     }
     Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn agent_compact_context(state: State<'_, AppRuntime>) -> Result<(), String> {
+    if state.agent.status().await.active_turn_id.is_some() {
+        return Err("Warte, bis der laufende Auftrag abgeschlossen ist.".into());
+    }
+    state.agent.compact().await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1810,5 +2043,40 @@ mod tests {
             ..proposed
         };
         assert!(!UiMemory::from_domain(&dismissed).active);
+    }
+
+    #[test]
+    fn context_usage_uses_the_active_prompt_instead_of_cumulative_billing_tokens() {
+        let update = context_usage_update(&json!({
+            "threadId":"thread-1",
+            "turnId":"turn-1",
+            "tokenUsage":{
+                "last":{"totalTokens":72_000},
+                "total":{"totalTokens":310_000},
+                "modelContextWindow":100_000
+            }
+        }))
+        .unwrap();
+        assert_eq!(update["context"]["usedTokens"], 72_000);
+        assert_eq!(update["context"]["totalTokens"], 310_000);
+        assert_eq!(update["context"]["stage"], "healthy");
+        let utilization = update["context"]["utilizationPercent"].as_f64().unwrap();
+        let remaining = update["context"]["remainingPercent"].as_f64().unwrap();
+        assert!((utilization - 68.18).abs() < 0.01);
+        assert!((remaining - 31.82).abs() < 0.01);
+    }
+
+    #[test]
+    fn context_usage_warns_only_when_the_usable_window_is_nearly_full() {
+        let healthy = context_usage_update(&json!({
+            "tokenUsage":{"last":{"totalTokens":69_000},"total":{"totalTokens":69_000},"modelContextWindow":100_000}
+        }))
+        .unwrap();
+        let critical = context_usage_update(&json!({
+            "tokenUsage":{"last":{"totalTokens":90_000},"total":{"totalTokens":90_000},"modelContextWindow":100_000}
+        }))
+        .unwrap();
+        assert_eq!(healthy["context"]["stage"], "healthy");
+        assert_eq!(critical["context"]["stage"], "warning");
     }
 }

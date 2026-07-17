@@ -420,6 +420,14 @@ pub struct AgentSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentSessionSummary {
+    pub session: AgentSession,
+    pub message_count: usize,
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentMessage {
     pub id: String,
     pub session_id: String,

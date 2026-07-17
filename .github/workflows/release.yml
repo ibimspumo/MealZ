@@ -36,12 +36,13 @@ jobs:
           releaseBody: |
             MealZ v__VERSION__ für Macs mit Apple Silicon.
 
-            - Turngenaue, sichtbare Agenten-Aktivitäten mit Webrecherche und Bildstatus
-            - Reparierter Start eines neuen Gesprächs und aktives Memory-Verhalten
-            - Rezeptlöschung, Kalender-Aktualisierung und begrenzte Rezeptbilder
-            - Klickbare Kalenderkarten mit Detailmodal und informativer Agenda
-            - Fixierte Agentenansicht mit intern scrollendem Nachrichtenverlauf
-            - Isolierte Development-Datenbank zum Schutz persönlicher Live-Daten
+            - Zuverlässiger In-App-Dialog zum Starten neuer Gespräche
+            - Lokale Gesprächshistorie mit Vorschau, Zeitstempel und Wiederöffnen
+            - Gespeicherte Codex-Threads werden beim Gesprächswechsel fortgesetzt
+            - Echtes Kontext-Monitoring mit automatischer Codex-Verdichtung und sicherer Neuer-Chat-Empfehlung
+            - Sichtbare Lade- und Fehlerzustände statt unsichtbarer Browserdialoge
+            - Reparierte Rezept- und Memory-Löschung mit Bestätigungsdialog
+            - Rollback auf das vorherige Gespräch bei einem App-Server-Fehler
           releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin

@@ -4,7 +4,7 @@ use serde_json::json;
 use super::{
     MealzStore,
     models::{
-        Memory, Nutrition, PantryItem, PlanEntry, ProfilePatch, Recipe, RecipeImage,
+        AgentMessage, Memory, Nutrition, PantryItem, PlanEntry, ProfilePatch, Recipe, RecipeImage,
         RecipeIngredient, RecipeSource, RecipeStep,
     },
     store::calculated_eer_kcal,
@@ -338,6 +338,89 @@ fn creating_a_new_agent_session_archives_the_previous_current_session() {
         .unwrap();
     assert_eq!(current.id, second.id);
     assert_eq!(current.codex_thread_id.as_deref(), Some("thread-new"));
+}
+
+#[test]
+fn conversations_list_useful_metadata_and_keep_exactly_one_active_session() {
+    let store = MealzStore::in_memory().unwrap();
+    let first = store
+        .create_agent_session(
+            Some("thread-lasagne".into()),
+            "Lasagne planen".into(),
+            json!({}),
+        )
+        .unwrap();
+    store
+        .append_agent_message(AgentMessage {
+            id: String::new(),
+            session_id: first.id.clone(),
+            role: "user".into(),
+            content: "Plane mir eine Lasagne für Sonntag".into(),
+            item_id: None,
+            tool_name: None,
+            tool_payload: None,
+            created_at: String::new(),
+        })
+        .unwrap();
+    let second = store
+        .create_agent_session(Some("thread-curry".into()), "Curry".into(), json!({}))
+        .unwrap();
+    store
+        .append_agent_message(AgentMessage {
+            id: String::new(),
+            session_id: second.id.clone(),
+            role: "assistant".into(),
+            content: "Ich plane ein schnelles Curry.".into(),
+            item_id: None,
+            tool_name: None,
+            tool_payload: None,
+            created_at: String::new(),
+        })
+        .unwrap();
+    store
+        .record_agent_turn_activity(
+            &second.id,
+            "turn-1:tool-1",
+            json!({"id":"tool-1","name":"webSearch"}),
+        )
+        .unwrap();
+
+    let conversations = store.list_agent_sessions().unwrap();
+    assert_eq!(conversations.len(), 2);
+    assert_eq!(conversations[0].session.id, second.id);
+    assert_eq!(conversations[0].session.status, "active");
+    assert_eq!(conversations[0].message_count, 1);
+    assert_eq!(
+        conversations[0].preview.as_deref(),
+        Some("Ich plane ein schnelles Curry.")
+    );
+    assert_eq!(conversations[1].session.status, "archived");
+
+    let restored = store.activate_agent_session(&first.id).unwrap();
+    assert_eq!(restored.codex_thread_id.as_deref(), Some("thread-lasagne"));
+    assert_eq!(store.list_agent_messages(&first.id, 10).unwrap().len(), 1);
+    let conversations = store.list_agent_sessions().unwrap();
+    assert_eq!(
+        conversations
+            .iter()
+            .filter(|item| item.session.status == "active")
+            .count(),
+        1
+    );
+    assert_eq!(conversations[0].session.id, first.id);
+}
+
+#[test]
+fn activating_an_unknown_conversation_does_not_archive_the_current_one() {
+    let store = MealzStore::in_memory().unwrap();
+    let current = store
+        .create_agent_session(Some("thread-current".into()), "Aktuell".into(), json!({}))
+        .unwrap();
+    assert!(store.activate_agent_session("missing-session").is_err());
+    assert_eq!(
+        store.current_agent_session().unwrap().unwrap().id,
+        current.id
+    );
 }
 
 #[test]

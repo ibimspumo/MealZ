@@ -10,8 +10,7 @@ import { useAppStore } from "./store";
 
 beforeEach(() => {
   resetDemo(true);
-  useAppStore.setState({ view: "today", loading: true, agentStatus: "idle", onboardingComplete: true, onboardingSessionDismissed: false, toasts: [] });
-  vi.spyOn(window, "confirm").mockReturnValue(true);
+  useAppStore.setState({ view: "today", loading: true, agentStatus: "idle", agentContext: { stage: "unknown", automaticCompaction: true }, onboardingComplete: true, onboardingSessionDismissed: false, toasts: [] });
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -110,21 +109,64 @@ describe("MealZ app flows", () => {
     await user.click(screen.getByRole("button", { name: /^Rezepte/ }));
     await user.click(screen.getByRole("button", { name: "Timos Lasagne öffnen" }));
     await user.click(screen.getByRole("button", { name: "Löschen" }));
+    expect(screen.getByRole("dialog", { name: "Rezept löschen?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Rezept endgültig löschen" }));
     expect(await screen.findByText("Rezept konnte nicht gelöscht werden")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Timos Lasagne" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Rezept löschen?" })).toBeInTheDocument();
+  });
+
+  it("deletes a recipe through the native in-app confirmation flow", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    await user.click(screen.getByRole("button", { name: /^Rezepte/ }));
+    await user.click(screen.getByRole("button", { name: "Timos Lasagne öffnen" }));
+    await user.click(screen.getByRole("button", { name: "Löschen" }));
+    expect(screen.getByRole("dialog", { name: "Rezept löschen?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Rezept endgültig löschen" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Timos Lasagne öffnen" })).not.toBeInTheDocument());
+    expect(useAppStore.getState().recipes.some((recipe) => recipe.id === "r-lasagna")).toBe(false);
   });
 
   it("reports a failed new-chat request without clearing the visible conversation", async () => {
     const user = userEvent.setup();
-    vi.spyOn(api, "agentNewThread").mockRejectedValueOnce(new Error("Codex App Server nicht erreichbar"));
+    vi.spyOn(api, "agentCreateConversation").mockRejectedValueOnce(new Error("Codex App Server nicht erreichbar"));
     render(<App />);
     await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
     const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
     await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
     expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Neues Gespräch" }));
-    expect(await screen.findByText("Neues Gespräch konnte nicht gestartet werden")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Neues Gespräch starten?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Gespräch starten" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Codex App Server nicht erreichbar");
     expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
+  });
+
+  it("starts a new conversation from a non-empty transcript and exposes local history", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
+    await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
+    expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Neues Gespräch" }));
+    expect(screen.getByRole("dialog", { name: "Neues Gespräch starten?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(screen.getByText(/Guten Morgen, Timo/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Neues Gespräch" }));
+    await user.click(screen.getByRole("button", { name: "Gespräch starten" }));
+    expect(await screen.findByText("Was möchtest du essen?")).toBeInTheDocument();
+    expect(screen.getByText("Neues Gespräch gestartet")).toBeInTheDocument();
+    expect(useAppStore.getState().agentContext.stage).toBe("unknown");
+
+    await user.click(screen.getByRole("button", { name: "Gespräche" }));
+    const history = await screen.findByRole("dialog", { name: "Gesprächsverlauf" });
+    expect(await within(history).findByText("Neues MealZ-Gespräch")).toBeInTheDocument();
+    expect(within(history).getByText("MealZ Chat")).toBeInTheDocument();
+    expect(within(history).getByText("Aktiv")).toBeInTheDocument();
   });
 
   it("keeps the agent surface fixed while only the message list scrolls", async () => {
@@ -135,6 +177,34 @@ describe("MealZ app flows", () => {
     await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
     expect(document.querySelector(".workspace")).toHaveClass("workspace--fixed");
     expect(document.querySelector(".page--agent .messages")).toBeInTheDocument();
+  });
+
+  it("shows real Codex context usage, compaction progress, and a safe new-chat recommendation", async () => {
+    const user = userEvent.setup();
+    let emit: ((event: Parameters<Parameters<typeof api.onAgentEvent>[0]>[0]) => void) | undefined;
+    vi.spyOn(api, "onAgentEvent").mockImplementation(async (handler) => { emit = handler; return () => undefined; });
+    render(<App />);
+    await screen.findByRole("heading", { name: /Guten (Morgen|Tag|Abend), Timo/ });
+    const nav = screen.getByRole("navigation", { name: "Hauptnavigation" });
+    await user.click(within(nav).getByText("Mila").closest("button") as HTMLButtonElement);
+
+    act(() => emit?.({ type: "context_updated", context: { stage: "healthy", utilizationPercent: 42, remainingPercent: 58, usedTokens: 86_000, contextWindow: 200_000, automaticCompaction: true } }));
+    expect(screen.getByText("Genug Platz im Gespräch")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Belegter Gesprächskontext" })).toHaveAttribute("aria-valuenow", "42");
+
+    act(() => emit?.({ type: "context_updated", context: { stage: "warning", utilizationPercent: 79, remainingPercent: 21 } }));
+    const contextPanel = document.querySelector<HTMLElement>(".conversation-context");
+    expect(within(contextPanel!).getByText("Kontext wird bald verdichtet")).toBeInTheDocument();
+    expect(within(contextPanel!).queryByRole("button", { name: "Neues Gespräch" })).not.toBeInTheDocument();
+
+    act(() => emit?.({ type: "context_updated", context: { stage: "compacting", detail: "Der Gesprächsverlauf wird automatisch zusammengefasst." } }));
+    expect(within(contextPanel!).getByText("Kontext wird verdichtet")).toBeInTheDocument();
+    expect(screen.queryByText("Arbeitsschritte")).not.toBeInTheDocument();
+
+    act(() => emit?.({ type: "context_updated", context: { stage: "recommend_new", utilizationPercent: 96, remainingPercent: 4, detail: "Das Kontextfenster ist voll." } }));
+    const recommendButton = within(contextPanel!).getByRole("button", { name: "Neues Gespräch" });
+    await user.click(recommendButton);
+    expect(screen.getByRole("dialog", { name: "Neues Gespräch starten?" })).toBeInTheDocument();
   });
 
   it("reloads the current calendar range every time the calendar is opened", async () => {

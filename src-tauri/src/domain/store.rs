@@ -1030,8 +1030,15 @@ impl MealzStore {
     }
 
     pub fn upsert_agent_session(&self, session: AgentSession) -> DomainResult<AgentSession> {
-        let connection = self.conn();
-        connection.execute(
+        let mut connection = self.conn();
+        let transaction = connection.transaction()?;
+        if session.status == "active" {
+            transaction.execute(
+                "UPDATE agent_sessions SET status='archived', updated_at=?2 WHERE status='active' AND id<>?1",
+                params![session.id, session.updated_at],
+            )?;
+        }
+        transaction.execute(
             "INSERT INTO agent_sessions(id, codex_thread_id, title, status, metadata_json, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET codex_thread_id=excluded.codex_thread_id,
@@ -1047,6 +1054,102 @@ impl MealzStore {
                 session.updated_at
             ],
         )?;
+        transaction.commit()?;
+        Ok(session)
+    }
+
+    /// Lists every durable conversation. The active conversation is always
+    /// first, followed by archived conversations in most-recently-used order.
+    /// Tool-only timeline rows do not inflate the human message count or
+    /// become the preview shown in the conversation picker.
+    pub fn list_agent_sessions(&self) -> DomainResult<Vec<AgentSessionSummary>> {
+        let connection = self.conn();
+        let mut statement = connection.prepare(
+            "SELECT s.id, s.codex_thread_id, s.title, s.status, s.metadata_json,
+                    s.created_at, s.updated_at,
+                    (SELECT COUNT(*) FROM agent_messages m
+                     WHERE m.session_id=s.id AND TRIM(m.content)<>''),
+                    (SELECT m.content FROM agent_messages m
+                     WHERE m.session_id=s.id AND TRIM(m.content)<>''
+                     ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)
+             FROM agent_sessions s
+             ORDER BY CASE WHEN s.status='active' THEN 0 ELSE 1 END,
+                      s.updated_at DESC, s.created_at DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let metadata: String = row.get(4)?;
+            Ok((
+                AgentSession {
+                    id: row.get(0)?,
+                    codex_thread_id: row.get(1)?,
+                    title: row.get(2)?,
+                    status: row.get(3)?,
+                    metadata: serde_json::from_str(&metadata).unwrap_or_else(|_| json!({})),
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                },
+                row.get::<_, i64>(7)?.max(0) as usize,
+                row.get::<_, Option<String>>(8)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (session, message_count, preview) = row?;
+            Ok(AgentSessionSummary {
+                session,
+                message_count,
+                preview,
+            })
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(DomainError::from)
+    }
+
+    /// Makes an existing conversation current without changing its saved
+    /// Codex thread id or transcript. The transaction guarantees exactly one
+    /// active session at commit time.
+    pub fn activate_agent_session(&self, session_id: &str) -> DomainResult<AgentSession> {
+        if session_id.trim().is_empty() {
+            return Err(DomainError::Validation(
+                "Gesprächs-ID darf nicht leer sein".into(),
+            ));
+        }
+        let mut connection = self.conn();
+        let transaction = connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id=?1)",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(DomainError::NotFound("Agenten-Gespräch".into()));
+        }
+        let now = now_rfc3339();
+        transaction.execute(
+            "UPDATE agent_sessions SET status='archived', updated_at=?1 WHERE status='active' AND id<>?2",
+            params![now, session_id],
+        )?;
+        transaction.execute(
+            "UPDATE agent_sessions SET status='active', updated_at=?2 WHERE id=?1",
+            params![session_id, now],
+        )?;
+        let session = transaction.query_row(
+            "SELECT id, codex_thread_id, title, status, metadata_json, created_at, updated_at
+             FROM agent_sessions WHERE id=?1",
+            [session_id],
+            |row| {
+                let metadata: String = row.get(4)?;
+                Ok(AgentSession {
+                    id: row.get(0)?,
+                    codex_thread_id: row.get(1)?,
+                    title: row.get(2)?,
+                    status: row.get(3)?,
+                    metadata: serde_json::from_str(&metadata).unwrap_or_else(|_| json!({})),
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        )?;
+        transaction.commit()?;
         Ok(session)
     }
 
@@ -1159,8 +1262,9 @@ impl MealzStore {
         if message.content.trim().is_empty() && message.tool_name.is_none() {
             return Err(DomainError::Validation("Leere Agenten-Nachricht".into()));
         }
-        let connection = self.conn();
-        let session_exists: bool = connection.query_row(
+        let mut connection = self.conn();
+        let transaction = connection.transaction()?;
+        let session_exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_sessions WHERE id=?1)",
             [&message.session_id],
             |row| row.get(0),
@@ -1174,7 +1278,7 @@ impl MealzStore {
         if message.created_at.is_empty() {
             message.created_at = now_rfc3339();
         }
-        connection.execute(
+        transaction.execute(
             "INSERT INTO agent_messages(
                 id, session_id, role, content, item_id, tool_name, tool_payload_json, created_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -1193,6 +1297,11 @@ impl MealzStore {
                 message.created_at
             ],
         )?;
+        transaction.execute(
+            "UPDATE agent_sessions SET updated_at=?2 WHERE id=?1",
+            params![message.session_id, message.created_at],
+        )?;
+        transaction.commit()?;
         Ok(message)
     }
 

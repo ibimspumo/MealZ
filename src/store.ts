@@ -4,6 +4,8 @@ import { api } from "./bridge";
 import type {
   AgentMessage,
   AgentCapabilities,
+  AgentContextState,
+  AgentConversation,
   BootstrapData,
   Memory,
   PlanItem,
@@ -21,6 +23,8 @@ interface AppStore extends BootstrapData {
   activeAgentMessageId?: string;
   agentDraft: string;
   agentCapabilities: AgentCapabilities;
+  agentContext: AgentContextState;
+  agentConversations: AgentConversation[];
   selectedRecipeId?: string;
   onboardingSessionDismissed: boolean;
   toasts: ToastMessage[];
@@ -52,6 +56,9 @@ interface AppStore extends BootstrapData {
   deleteMemory: (id: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   newThread: () => Promise<void>;
+  loadAgentConversations: () => Promise<void>;
+  activateConversation: (sessionId: string) => Promise<void>;
+  compactAgentContext: () => Promise<void>;
   stopAgent: () => Promise<void>;
   toast: (tone: ToastMessage["tone"], title: string, detail?: string) => void;
   dismissToast: (id: string) => void;
@@ -80,6 +87,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   activeAgentMessageId: undefined,
   agentDraft: "",
   agentCapabilities: { webSearch: "unknown", imageGeneration: "unknown" },
+  agentContext: { stage: "unknown", automaticCompaction: true },
+  agentConversations: [],
   selectedRecipeId: undefined,
   onboardingSessionDismissed: false,
   toasts: [],
@@ -173,6 +182,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
               messages: state.messages.length ? state.messages : data.messages,
             }));
           }).catch((error: unknown) => get().toast("error", "Änderungen konnten nicht synchronisiert werden", String(error)));
+        }
+        if (event.type === "context_updated") {
+          set((state) => {
+            const compacted = Boolean(event.context.lastCompactedAt) && event.context.utilizationPercent == null;
+            const base = compacted
+              ? { stage: "unknown" as const, automaticCompaction: true, lastCompactedAt: event.context.lastCompactedAt }
+              : state.agentContext;
+            const recommendNew = event.context.stage === "warning"
+              && event.context.remainingPercent != null
+              && event.context.remainingPercent <= 5
+              && Boolean(state.agentContext.lastCompactedAt);
+            return { agentContext: { ...base, ...event.context, stage: recommendNew ? "recommend_new" : event.context.stage ?? base.stage, automaticCompaction: true } };
+          });
         }
         if (event.type === "error") get().toast("error", "Agentenfehler", event.message);
       });
@@ -282,14 +304,60 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   newThread: async () => {
-    const data = await api.agentNewThread();
-    set({ ...data, activeAgentMessageId: undefined, agentStatus: "idle" });
-    get().toast("success", "Neues Gespräch gestartet");
+    const previousContext = get().agentContext;
+    set({ agentContext: { stage: "unknown", automaticCompaction: true } });
+    try {
+      const result = await api.agentCreateConversation();
+      set((state) => ({
+        ...result.bootstrap,
+        activeAgentMessageId: undefined,
+        agentStatus: "idle",
+        agentContext: { stage: "unknown", automaticCompaction: true },
+        agentConversations: [result.conversation, ...state.agentConversations.filter((entry) => entry.id !== result.conversation.id).map((entry) => ({ ...entry, status: "archived" as const, active: false }))],
+      }));
+      get().toast("success", "Neues Gespräch gestartet");
+    } catch (error) {
+      set({ agentContext: previousContext });
+      throw error;
+    }
+  },
+  loadAgentConversations: async () => {
+    const agentConversations = await api.listAgentConversations();
+    set({ agentConversations });
+  },
+  activateConversation: async (sessionId) => {
+    const previousContext = get().agentContext;
+    set({ agentContext: { stage: "unknown", automaticCompaction: true } });
+    try {
+      const result = await api.agentActivateConversation(sessionId);
+      set((state) => ({
+        ...result.bootstrap,
+        activeAgentMessageId: undefined,
+        agentStatus: "idle",
+        agentContext: state.agentContext,
+        agentConversations: state.agentConversations.map((entry) => ({ ...entry, status: entry.id === result.conversation.id ? "active" as const : "archived" as const, active: entry.id === result.conversation.id })),
+      }));
+      get().toast("success", "Gespräch geöffnet", result.conversation.title);
+    } catch (error) {
+      set({ agentContext: previousContext });
+      throw error;
+    }
   },
   stopAgent: async () => {
     await api.agentStop();
     set({ agentStatus: "idle" });
     get().toast("info", "Agent gestoppt");
+  },
+  compactAgentContext: async () => {
+    const previous = get().agentContext;
+    set({ agentContext: { ...previous, stage: "compacting", detail: "Der Gesprächsverlauf wird zusammengefasst." } });
+    try {
+      await api.agentCompactContext();
+    } catch (error) {
+      const detail = String(error);
+      set({ agentContext: { ...previous, stage: "error", detail } });
+      get().toast("error", "Kontext konnte nicht verdichtet werden", detail);
+    }
   },
   toast: (tone, title, detail) => {
     const id = crypto.randomUUID();

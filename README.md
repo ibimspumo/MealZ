@@ -40,6 +40,7 @@ Der Befehl entfernt ausschließlich das macOS-Quarantäne-Attribut von `MealZ.ap
 - **Rezeptkatalog:** Strukturierte Zutaten, Arbeitsschritte, Portionen, Zeiten, Tags, Bilder, Quellen, Nährwerte, Favoriten, Bewertungen und Kommentare lokal speichern.
 - **Deterministische Einkaufsliste:** Zutaten für einen Datumsbereich aus dem Plan aggregieren, Einheiten normalisieren, Kategorien bilden, Artikel ergänzen und abhaken.
 - **Persönlicher Agent:** Gestreamter Markdown-Chat über einen persistenten Codex-Thread mit sichtbaren Dynamic-Tool-Aufrufen für Rezepte, Planung, Einkauf, Profil und Memory.
+- **Verwalteter Gesprächskontext:** MealZ zeigt die echte Kontextauslastung des Codex App Servers. Lange Gespräche werden automatisch verdichtet; ein neuer Chat wird nur empfohlen, wenn danach weiterhin kaum Reserve bleibt.
 - **Transparentes Memory:** Erinnerungen mit Art, Herkunft, Confidence und Status ansehen, bearbeiten, pausieren oder löschen.
 - **Editierbare Agentendateien:** `PERSONA.md` steuert Ton und Verhalten; `MEMORY.md` ergänzt das strukturierte Memory um freien Langzeitkontext. Beide Dateien sind direkt in den Einstellungen bearbeitbar.
 - **Local-first:** SQLite ist die lokale Quelle der Wahrheit für Rezepte, Planung, Einkauf, Profil, Bewertungen, Memories und Agentenmetadaten.
@@ -152,7 +153,7 @@ Bitte behandle die App nicht als medizinische Beratung. Nährwerte und Zielwerte
 
 ### Projektstatus
 
-MealZ befindet sich in aktiver Entwicklung (`0.1.1`, Alpha) und ist derzeit auf die persönliche Nutzung unter macOS ausgerichtet. Datenmodelle und interne Schnittstellen können sich noch ändern. Rezeptbilder werden aus belastbaren Quellen übernommen oder über die native Bildgenerierung des Codex App Servers erzeugt und lokal zwischengespeichert. Web- oder Mobile-Clients sowie notarisiert verteilte Releases sind mögliche spätere Ausbaustufen.
+MealZ befindet sich in aktiver Entwicklung (`0.1.2`, Alpha) und ist derzeit auf die persönliche Nutzung unter macOS ausgerichtet. Datenmodelle und interne Schnittstellen können sich noch ändern. Rezeptbilder werden aus belastbaren Quellen übernommen oder über die native Bildgenerierung des Codex App Servers erzeugt und lokal zwischengespeichert. Web- oder Mobile-Clients sowie notarisiert verteilte Releases sind mögliche spätere Ausbaustufen.
 
 ### Mitwirken
 
@@ -177,6 +178,7 @@ MealZ is a personal, local-first Tauri 2 desktop app for macOS. It combines Mond
 - Date-range shopping lists aggregated from structured recipe ingredients
 - Streaming Markdown chat backed exclusively by `codex app-server`
 - Persistent Codex threads and visible Dynamic Tool activity
+- Live context-window usage with automatic Codex compaction and a safe new-chat recommendation
 - Editable structured memories plus local `PERSONA.md` and `MEMORY.md`
 - SQLite-backed local source of truth
 

@@ -150,12 +150,47 @@ export interface AgentCapabilities {
   imageGeneration: boolean | "unknown";
 }
 
+export interface AgentConversation {
+  id: string;
+  title: string;
+  status: "active" | "archived";
+  active: boolean;
+  threadId?: string;
+  messageCount: number;
+  preview?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConversationResult {
+  action: "created" | "activated";
+  conversation: AgentConversation;
+  bootstrap: BootstrapData;
+  resumed: boolean;
+  serverVersion: string;
+}
+
+export type AgentContextStage = "unknown" | "healthy" | "warning" | "compacting" | "recommend_new" | "error";
+
+export interface AgentContextState {
+  stage: AgentContextStage;
+  usedTokens?: number;
+  totalTokens?: number;
+  contextWindow?: number;
+  utilizationPercent?: number;
+  remainingPercent?: number;
+  automaticCompaction: boolean;
+  lastCompactedAt?: string;
+  detail?: string;
+}
+
 export type AgentEvent =
   | { type: "message_delta"; messageId: string; delta: string }
   | { type: "message_completed"; message: AgentMessage }
   | { type: "tool_started"; activity: AgentToolActivity }
   | { type: "tool_completed"; activity: AgentToolActivity }
   | { type: "data_changed"; areas?: string[] }
+  | { type: "context_updated"; context: Partial<AgentContextState> }
   | { type: "error"; message: string }
   | { type: "status"; status: "idle" | "thinking" | "streaming" };
 

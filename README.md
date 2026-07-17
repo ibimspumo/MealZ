@@ -95,7 +95,7 @@ Die erzeugten macOS-Artefakte liegen anschließend unter `src-tauri/target/relea
 
 ### Updates & Releases
 
-Installierte MealZ-Versionen können unter **Einstellungen → Updates & Releases** signierte GitHub-Releases prüfen, herunterladen und nach deiner Bestätigung installieren. Der Browser-Demo-Modus zeigt dafür bewusst einen Hinweis statt einen Netzwerkanruf auszuführen. Die Release-Automation baut `0.1.0` für Apple Silicon und Intel, signiert Updater-Artefakte mit `TAURI_SIGNING_PRIVATE_KEY`; für öffentlich verteilte macOS-Bundles bleiben Developer-ID-Signierung und Notarisierung ein separater Release-Schritt.
+Installierte MealZ-Versionen können unter **Einstellungen → Updates & Releases** signierte GitHub-Releases prüfen, herunterladen und nach deiner Bestätigung installieren. Der Browser-Demo-Modus zeigt dafür bewusst einen Hinweis statt einen Netzwerkanruf auszuführen. Die Release-Automation baut ausschließlich für Macs mit Apple Silicon und signiert Updater-Artefakte mit `TAURI_SIGNING_PRIVATE_KEY`; für öffentlich verteilte macOS-Bundles bleiben Developer-ID-Signierung und Notarisierung ein separater Release-Schritt.
 
 ### Tests und Qualitätschecks
 
